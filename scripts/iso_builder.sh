@@ -1,11 +1,12 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v3.3 - Corrected Wallpaper Path)
+# ArttulOS ISO Build Script (FINAL v3.6 - Full Branding with GRUB Theme)
 #
 # Description:
-# - Looks for 'strix.png' in the same directory as the script.
-# - Implements full ArttulOS branding and automated installation.
+# - Implements a custom GRUB bootloader theme with strix.png background and
+#   purple/blue menu colors.
+# - Implements full ArttulOS branding across the entire OS.
 # ==============================================================================
 
 set -e
@@ -16,7 +17,7 @@ PREP_TOOLS_DIR="build-tools-rpms"
 BUILD_DIR="arttulos-build"
 ISO_EXTRACT_DIR="${BUILD_DIR}/iso_extracted"
 CUSTOM_REPO_DIR="${ISO_EXTRACT_DIR}/custom_repo"
-WALLPAPER_FILE="strix.png" # <-- The wallpaper file itself
+WALLPAPER_FILE="strix.png"
 FINAL_ISO_NAME="ArttulOS-9-GNOME-Branded-Installer.iso"
 ISO_LABEL="ARTTULOS9"
 FINAL_ISO_PATH="${PWD}/${FINAL_ISO_NAME}"
@@ -41,7 +42,6 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# --- FIX: Check for branding asset in the CURRENT directory ---
 if [ ! -f "${WALLPAPER_FILE}" ]; then
     print_msg "red" "Branding file not found. Please place '${WALLPAPER_FILE}' in the same directory as this script."
     exit 1
@@ -83,7 +83,6 @@ chmod -R u+w "${ISO_EXTRACT_DIR}"
 
 print_msg "blue" "Injecting branding assets into the ISO structure..."
 mkdir -p "${ISO_EXTRACT_DIR}/branding"
-# --- FIX: Copy the wallpaper from the CURRENT directory ---
 cp "${WALLPAPER_FILE}" "${ISO_EXTRACT_DIR}/branding/"
 
 # 3. Create Custom Repository
@@ -148,12 +147,10 @@ cat << PLYMOUTH_EOF > \${PLYMOUTH_THEME_DIR}/arttulos.plymouth
 Name=ArttulOS
 Description=ArttulOS Boot Splash
 ModuleName=script
-
 [script]
 ImageDir=\${PLYMOUTH_THEME_DIR}
 ScriptFile=\${PLYMOUTH_THEME_DIR}/arttulos.script
 PLYMOUTH_EOF
-
 cat << SCRIPT_EOF > \${PLYMOUTH_THEME_DIR}/arttulos.script
 wallpaper_image = Image("strix.png");
 screen_width = Window.GetWidth();
@@ -162,36 +159,79 @@ resized_wallpaper_image = wallpaper_image.Scale(screen_width, screen_height);
 wallpaper_sprite = Sprite(resized_wallpaper_image);
 wallpaper_sprite.SetZ(-100);
 SCRIPT_EOF
-
 echo "Setting new Plymouth theme and rebuilding initramfs..."
 plymouth-set-default-theme arttulos -R
+
+# --- 5. CREATE AND SET GRUB THEME ---
+echo "Creating GRUB theme..."
+GRUB_THEME_DIR="/boot/grub2/themes/arttulos"
+mkdir -p \$GRUB_THEME_DIR
+cp "\${SYSTEM_WALLPAPER_DIR}/strix.png" "\${GRUB_THEME_DIR}/background.png"
+
+cat << THEME_EOF > \${GRUB_THEME_DIR}/theme.txt
+# ArttulOS GRUB Theme
+desktop-image: "background.png"
+desktop-color: "#000000"
+title-text: ""
++ boot_menu {
+    left = 15%
+    width = 70%
+    top = 35%
+    height = 40%
+    item_font = "DejaVu Sans 16"
+    item_color = "#87cefa"                  # Light Blue for normal text
+    item_spacing = 25
+    selected_item_font = "DejaVu Sans Bold 16"
+    selected_item_color = "#d8b6ff"                 # Light Purple for selected text
+}
++ hbox {
+    left = 15%
+    top = 80%
+    width = 70%
+    + label {
+        text = "ArttulOS 9 - Mainline Kernel"
+        font = "DejaVu Sans 12"
+        color = "#cccccc"
+    }
+}
+THEME_EOF
+
+echo "Applying GRUB theme..."
+# Set the theme and ensure a graphical terminal is enabled
+echo 'GRUB_THEME="/boot/grub2/themes/arttulos/theme.txt"' >> /etc/default/grub
+echo 'GRUB_TERMINAL_OUTPUT="gfxterm"' >> /etc/default/grub
+
+# Set the ELRepo kernel as default *before* rebuilding the config
+grub2-set-default 0
+
+# Rebuild the GRUB config to apply all changes
+grub2-mkconfig -o /boot/grub2/grub.cfg
 
 echo "Configuring GDM login and user desktop backgrounds..."
 GSETTINGS_OVERRIDES_DIR="/etc/dconf/db/local.d"
 GDM_OVERRIDES_DIR="/etc/dconf/db/gdm.d"
 WALLPAPER_PATH="/usr/share/backgrounds/arttulos/strix.png"
-
-mkdir -p \$GSETTINGS_OVERRIDES_DIR
-mkdir -p \$GDM_OVERRIDES_DIR
-
+mkdir -p \$GSETTINGS_OVERRIDES_DIR \$GDM_OVERRIDES_DIR
 cat << GSETTINGS_EOF > \${GSETTINGS_OVERRIDES_DIR}/01-arttulos-branding
 [org/gnome/desktop/background]
 picture-uri='file://\${WALLPAPER_PATH}'
 picture-uri-dark='file://\${WALLPAPER_PATH}'
-
 [org/gnome/desktop/screensaver]
 picture-uri='file://\${WALLPAPER_PATH}'
 GSETTINGS_EOF
-
 cat << GDM_EOF > \${GDM_OVERRIDES_DIR}/01-arttulos-branding
 [org/gnome/desktop/background]
 picture-uri='file://\${WALLPAPER_PATH}'
 picture-uri-dark='file://\${WALLPAPER_PATH}'
 GDM_EOF
-
 dconf update
 
-grub2-set-default 0
+echo "Branding GNOME Tour application..."
+GNOME_TOUR_DESKTOP_FILE="/usr/share/applications/org.gnome.Tour.desktop"
+if [ -f "\$GNOME_TOUR_DESKTOP_FILE" ]; then
+    sed -i "s/Name=GNOME Tour/Name=ArttulOS Tour/g" "\$GNOME_TOUR_DESKTOP_FILE"
+    sed -i "s/Comment=A tour of the GNOME desktop/Comment=A tour of the ArttulOS desktop/g" "\$GNOME_TOUR_DESKTOP_FILE"
+fi
 
 cat << 'SERVICE_SCRIPT_EOF' > /usr/local/sbin/arttulos-first-boot-setup.sh
 #!/bin/bash
