@@ -3,7 +3,7 @@
 # ==============================================================================
 # ArttulOS ISO Build Script (Manual Start Version)
 #
-# Version: 1.3 - Correctly enables the elrepo-kernel repository for download.
+# Version: 1.4 - Fixed isohybrid BIOS compatibility warning.
 #
 # Description: This script creates a custom, offline Rocky Linux 9 installer
 #              for ArttulOS. It embeds the ELRepo mainline kernel and a Kickstart
@@ -44,11 +44,12 @@ print_msg() {
 # Function to check for required commands
 check_dependencies() {
     print_msg "blue" "Checking for required tools..."
-    for cmd in dnf createrepo_c genisoimage isohybrid; do
+    for cmd in dnf createrepo_c genisoimage isohybrid implantisomd5sum; do
         if ! command -v "$cmd" &> /dev/null; then
-            print_msg "yellow" "Command '${cmd}' not found. Attempting to install required packages..."
-            dnf install -y dnf-utils createrepo_c genisoimage syslinux
-            break # Install all at once and then re-check
+            print_msg "yellow" "A required tool was not found. Attempting to install required packages..."
+            # Install all potential dependencies in one go
+            dnf install -y dnf-utils createrepo_c genisoimage syslinux isomd5sum
+            break
         fi
     done
     print_msg "green" "All dependencies are satisfied."
@@ -57,7 +58,7 @@ check_dependencies() {
 # Function to clean up previous builds
 cleanup() {
     print_msg "blue" "Cleaning up previous build directories..."
-    umount "${BUILD_DIR}/iso_mount" &>/dev/null || true # Ignore errors if not mounted
+    umount "${BUILD_DIR}/iso_mount" &>/dev/null || true
     rm -rf "${BUILD_DIR}"
 }
 
@@ -86,18 +87,15 @@ print_msg "blue" "Mounting and extracting the base ISO. This may take a few minu
 mount -o loop,ro "$BASE_ISO_PATH" "${BUILD_DIR}/iso_mount"
 rsync -a -H --exclude=TRANS.TBL "${BUILD_DIR}/iso_mount/" "${ISO_EXTRACT_DIR}"
 umount "${BUILD_DIR}/iso_mount"
-chmod -R u+w "${ISO_EXTRACT_DIR}" # Make files writable
+chmod -R u+w "${ISO_EXTRACT_DIR}"
 
 # 3. Download Kernel Packages
 print_msg "blue" "Installing ELRepo release package..."
 dnf install -y https://www.elrepo.org/elrepo-release-9.el9.elrepo.noarch.rpm
-
 print_msg "blue" "Clearing DNF cache and rebuilding repository metadata..."
 dnf clean all
 dnf makecache
-
 print_msg "blue" "Downloading mainline kernel packages from elrepo-kernel..."
-# --- FIX: Explicitly enable the elrepo-kernel repository for the download command ---
 dnf download --enablerepo=elrepo-kernel --resolve --arch=x86_64 \
 --downloaddir="${DOWNLOAD_DIR}" \
 kernel-ml kernel-ml-devel
@@ -169,8 +167,6 @@ EOF
 
 # 6. Modify Bootloader Configs to ADD Kickstart Option
 print_msg "blue" "Adding Kickstart option to bootloader configurations..."
-
-# For Legacy BIOS (isolinux.cfg)
 ISOLINUX_CFG="${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
 cat << EOF >> "${ISOLINUX_CFG}"
 
@@ -179,8 +175,6 @@ label ks
   kernel vmlinuz
   append initrd=initrd.img inst.stage2=hd:LABEL=${ISO_LABEL} quiet inst.ks=hd:LABEL=${ISO_LABEL}:/ks.cfg
 EOF
-
-# For UEFI (grub.cfg)
 GRUB_CFG="${ISO_EXTRACT_DIR}/EFI/BOOT/grub.cfg"
 cat << EOF >> "${GRUB_CFG}"
 
@@ -198,10 +192,16 @@ genisoimage -o "/${FINAL_ISO_NAME}" \
   -no-emul-boot -boot-load-size 4 -boot-info-table \
   -eltorito-alt-boot -e images/efiboot.img -no-emul-boot \
   -R -J -v -T -V "${ISO_LABEL}" .
-
-# Make the ISO bootable on UEFI systems
-isohybrid --uefi "/${FINAL_ISO_NAME}"
 cd ..
+
+# --- FIX: Implant checksum and then create the hybrid boot info ---
+print_msg "blue" "Implanting checksum for BIOS compatibility..."
+implantisomd5sum "/${FINAL_ISO_NAME}"
+
+print_msg "blue" "Making the ISO bootable on USB (Hybrid)..."
+isohybrid --uefi "/${FINAL_ISO_NAME}"
+# --- END FIX ---
+
 # Change ownership of the final ISO to the user who ran the script with sudo
 chown "$(logname)":"$(logname)" "/${FINAL_ISO_NAME}"
 
