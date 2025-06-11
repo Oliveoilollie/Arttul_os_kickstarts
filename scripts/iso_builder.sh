@@ -1,11 +1,12 @@
 #!/bin/bash
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v4.2 - Fully Automated Zero-Touch)
+# ArttulOS ISO Build Script (FINAL v4.3 - Fixed Package Selection)
 #
 # Description:
 # - Creates a fully automated, non-interactive (zero-touch) installer.
-# - The installer runs in dark mode and requires no user input.
-# - Implements full OS identity, GRUB, and Plymouth branding.
+# - Fixes the "Error Checking Software Selection" by excluding the default
+#   kernel to prevent conflicts with the custom kernel.
+# - Installer runs in dark mode and requires no user input.
 # ==============================================================================
 
 set -e
@@ -118,8 +119,19 @@ reboot
 
 %packages --instLangs=en_US --excludedocs
 @workstation-product-environment
+
+# --- THIS IS THE FIX ---
+# Exclude the default kernel packages from the @workstation group to prevent
+# conflicts with the custom kernel-ml package we are installing.
+-kernel
+-kernel-core
+-kernel-modules
+
+# Install our custom mainline kernel from the custom repo
 kernel-ml
 kernel-ml-devel
+
+# Install other required packages
 policycoreutils-python-utils
 vim-enhanced
 kexec-tools
@@ -127,7 +139,7 @@ plymouth-scripts
 flatpak # Needed for Flatpak commands
 curl    # Needed for downloading Nix installer
 
-# --- FIX: Explicitly remove Rocky Linux logo packages ---
+# Explicitly remove Rocky Linux logo packages
 -rocky-logos
 -rocky-logos-httpd
 -rocky-logos-epel
