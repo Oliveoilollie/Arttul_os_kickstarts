@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v3.0 - Definitive Dracut and Bootloader Fix)
+# ArttulOS ISO Build Script (FINAL v3.1 - Full Branding Edition)
 #
 # Description:
-# This version fixes all previous errors by:
-# 1. Completely overwriting the bootloader configs to eliminate inst.stage2 errors.
-# 2. Using `dracut --regenerate-all` to build a correct initramfs for all kernels.
+# - Implements full ArttulOS branding: Plymouth boot splash, login screen,
+#   and desktop wallpaper using the provided 'scripts/strix.png' file.
+# - Creates a fully automated installer for a GNOME Desktop environment.
 # ==============================================================================
 
 set -e
@@ -17,7 +17,9 @@ PREP_TOOLS_DIR="build-tools-rpms"
 BUILD_DIR="arttulos-build"
 ISO_EXTRACT_DIR="${BUILD_DIR}/iso_extracted"
 CUSTOM_REPO_DIR="${ISO_EXTRACT_DIR}/custom_repo"
-FINAL_ISO_NAME="ArttulOS-9-GNOME-Desktop-Installer.iso"
+BRANDING_DIR="scripts"
+WALLPAPER_FILE="strix.png"
+FINAL_ISO_NAME="ArttulOS-9-GNOME-Branded-Installer.iso"
 ISO_LABEL="ARTTULOS9"
 FINAL_ISO_PATH="${PWD}/${FINAL_ISO_NAME}"
 
@@ -39,6 +41,13 @@ print_msg() {
 if [ "$EUID" -ne 0 ]; then
   print_msg "red" "This script must be run as root. Please use sudo."
   exit 1
+fi
+
+# --- Check for branding assets ---
+if [ ! -f "${BRANDING_DIR}/${WALLPAPER_FILE}" ]; then
+    print_msg "red" "Branding file not found at '${BRANDING_DIR}/${WALLPAPER_FILE}'."
+    echo "Please create the 'scripts' directory and place '${WALLPAPER_FILE}' inside it."
+    exit 1
 fi
 
 REQUIRED_CMDS=(xorriso createrepo_c)
@@ -66,7 +75,7 @@ rm -rf "${BUILD_DIR}"
 print_msg "blue" "Creating build workspace..."
 mkdir -p "${BUILD_DIR}/iso_mount" "${ISO_EXTRACT_DIR}" "${CUSTOM_REPO_DIR}"
 
-# 2. Extract Base ISO
+# 2. Extract Base ISO and Inject Branding
 read -p "Please enter the full path to the official Rocky Linux 9 DVD ISO file: " BASE_ISO_PATH
 if [ ! -f "$BASE_ISO_PATH" ]; then print_msg "red" "ISO file not found at '${BASE_ISO_PATH}'." && exit 1; fi
 print_msg "blue" "Mounting and extracting the base ISO..."
@@ -75,15 +84,19 @@ rsync -a -H --exclude=TRANS.TBL "${BUILD_DIR}/iso_mount/" "${ISO_EXTRACT_DIR}"
 umount "${BUILD_DIR}/iso_mount"
 chmod -R u+w "${ISO_EXTRACT_DIR}"
 
+print_msg "blue" "Injecting branding assets into the ISO structure..."
+mkdir -p "${ISO_EXTRACT_DIR}/branding"
+cp "${BRANDING_DIR}/${WALLPAPER_FILE}" "${ISO_EXTRACT_DIR}/branding/"
+
 # 3. Create Custom Repository
 print_msg "blue" "Copying kernel RPMs and creating simple custom repo..."
 cp "${PREP_KERNEL_DIR}"/*.rpm "${CUSTOM_REPO_DIR}/"
 createrepo_c "${CUSTOM_REPO_DIR}"
 
-# 4. Create and Inject the Kickstart File
-print_msg "blue" "Generating Kickstart file for GNOME Desktop installation..."
+# 4. Create and Inject the Branded Kickstart File
+print_msg "blue" "Generating Kickstart file with full branding..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
-# Kickstart file for ArttulOS (GNOME Desktop Edition)
+# Kickstart file for ArttulOS (GNOME Desktop Edition with Full Branding)
 graphical
 repo --name="BaseOS" --baseurl=file:///run/install/repo/BaseOS
 repo --name="AppStream" --baseurl=file:///run/install/repo/AppStream
@@ -109,6 +122,7 @@ kernel-ml-devel
 policycoreutils-python-utils
 vim-enhanced
 kexec-tools
+plymouth-scripts
 %end
 
 %post --log=/root/ks-post.log
@@ -119,35 +133,86 @@ usermod -aG wheel ArttulOS
 echo "ArttulOS:arttulos" | chpasswd
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
 
-# --- THE DEFINITIVE FIX FOR THE DRACUT TIMEOUT ERROR ---
-# Regenerate the initramfs for ALL installed kernels. This is the most
-# robust method to ensure the correct drivers are included for the custom kernel.
-echo "Forcing rebuild of all dracut initramfs images..."
-dracut --regenerate-all --force --verbose
+# --- 1. COPY BRANDING ASSETS ---
+# The branding folder was injected into the ISO by the build script.
+# We copy it from the installer environment to the final system.
+echo "Copying branding assets..."
+INSTALLER_BRANDING_DIR="/run/install/repo/branding"
+SYSTEM_WALLPAPER_DIR="/usr/share/backgrounds/arttulos"
+mkdir -p \$SYSTEM_WALLPAPER_DIR
+cp "\${INSTALLER_BRANDING_DIR}/strix.png" "\${SYSTEM_WALLPAPER_DIR}/strix.png"
+
+# --- 2. CREATE AND SET PLYMOUTH BOOT THEME ---
+echo "Creating Plymouth boot splash theme..."
+PLYMOUTH_THEME_DIR="/usr/share/plymouth/themes/arttulos"
+mkdir -p \$PLYMOUTH_THEME_DIR
+cp "\${SYSTEM_WALLPAPER_DIR}/strix.png" "\${PLYMOUTH_THEME_DIR}/"
+
+# Create the .plymouth metadata file
+cat << PLYMOUTH_EOF > \${PLYMOUTH_THEME_DIR}/arttulos.plymouth
+[Plymouth Theme]
+Name=ArttulOS
+Description=ArttulOS Boot Splash
+ModuleName=script
+
+[script]
+ImageDir=\${PLYMOUTH_THEME_DIR}
+ScriptFile=\${PLYMOUTH_THEME_DIR}/arttulos.script
+PLYMOUTH_EOF
+
+# Create the .script file to display the image
+cat << SCRIPT_EOF > \${PLYMOUTH_THEME_DIR}/arttulos.script
+wallpaper_image = Image("strix.png");
+screen_width = Window.GetWidth();
+screen_height = Window.GetHeight();
+resized_wallpaper_image = wallpaper_image.Scale(screen_width, screen_height);
+wallpaper_sprite = Sprite(resized_wallpaper_image);
+wallpaper_sprite.SetZ(-100);
+SCRIPT_EOF
+
+echo "Setting new Plymouth theme and rebuilding initramfs..."
+# Set the new theme as default and rebuild the initramfs with it.
+# This replaces the need for a separate dracut command.
+plymouth-set-default-theme arttulos -R
+
+# --- 3. SET GNOME DESKTOP AND LOGIN WALLPAPER ---
+echo "Configuring GDM login and user desktop backgrounds..."
+# This creates system-wide settings that apply to the login screen and all new users.
+GSETTINGS_OVERRIDES_DIR="/etc/dconf/db/local.d"
+GDM_OVERRIDES_DIR="/etc/dconf/db/gdm.d"
+WALLPAPER_PATH="/usr/share/backgrounds/arttulos/strix.png"
+
+mkdir -p \$GSETTINGS_OVERRIDES_DIR
+mkdir -p \$GDM_OVERRIDES_DIR
+
+# Create override for default user wallpaper and lock screen
+cat << GSETTINGS_EOF > \${GSETTINGS_OVERRIDES_DIR}/01-arttulos-branding
+[org/gnome/desktop/background]
+picture-uri='file://\${WALLPAPER_PATH}'
+picture-uri-dark='file://\${WALLPAPER_PATH}'
+
+[org/gnome/desktop/screensaver]
+picture-uri='file://\${WALLPAPER_PATH}'
+GSETTINGS_EOF
+
+# Create override for the GDM login screen
+cat << GDM_EOF > \${GDM_OVERRIDES_DIR}/01-arttulos-branding
+[org/gnome/desktop/background]
+picture-uri='file://\${WALLPAPER_PATH}'
+picture-uri-dark='file://\${WALLPAPER_PATH}'
+GDM_EOF
+
+# Compile the settings databases
+dconf update
 
 # Set the ELRepo kernel as default
 grub2-set-default 0
 
 # Create the first-boot service to install online apps
-cat << 'SCRIPT_EOF' > /usr/local/sbin/arttulos-first-boot-setup.sh
+cat << 'SERVICE_SCRIPT_EOF' > /usr/local/sbin/arttulos-first-boot-setup.sh
 #!/bin/bash
-LOG_FILE="/var/log/arttulos-first-boot.log"
-echo "--- ArttulOS First-Boot Setup Started at \$(date) ---" | tee -a \$LOG_FILE
-sleep 15
-echo "Installing Firefox, Gajim, and Element..." | tee -a \$LOG_FILE
-dnf install -y firefox gajim element-desktop | tee -a \$LOG_FILE
-echo "Application installation complete." | tee -a \$LOG_FILE
-cat << 'MOTD_EOF' > /etc/motd
-
-            (Genesis for the Ascii)
-
-        Welcome to ArttulOS
-      This system is running a mainline kernel from ELRepo.
-      First boot setup is complete.
-
-MOTD_EOF
-echo "--- ArttulOS First-Boot Setup Finished at \$(date) ---" | tee -a \$LOG_FILE
-SCRIPT_EOF
+dnf install -y firefox gajim element-desktop
+SERVICE_SCRIPT_EOF
 chmod +x /usr/local/sbin/arttulos-first-boot-setup.sh
 cat << 'SERVICE_EOF' > /etc/systemd/system/arttulos-first-boot.service
 [Unit]
@@ -174,7 +239,6 @@ ISOLINUX_CFG="${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
 GRUB_CFG="${ISO_EXTRACT_DIR}/EFI/BOOT/grub.cfg"
 KS_APPEND="inst.stage2=hd:LABEL=${ISO_LABEL} quiet inst.ks=hd:LABEL=${ISO_LABEL}:/ks.cfg"
 
-# --- FIX: Overwrite the Legacy BIOS boot config (isolinux.cfg) ---
 cat << EOF > "${ISOLINUX_CFG}"
 default vesamenu.c32
 timeout 10
@@ -186,7 +250,6 @@ label install
   append initrd=initrd.img ${KS_APPEND}
 EOF
 
-# --- FIX: Overwrite the UEFI boot config (grub.cfg) ---
 cat << EOF > "${GRUB_CFG}"
 set timeout=1
 menuentry 'Install ArttulOS' --class gnu-linux --class gnu --class os {
