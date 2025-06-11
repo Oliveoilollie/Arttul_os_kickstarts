@@ -3,7 +3,7 @@
 # ==============================================================================
 # ArttulOS ISO Build Script (Manual Start Version)
 #
-# Version: 1.2 - Fixed DNF cache issue after adding a new repository.
+# Version: 1.3 - Correctly enables the elrepo-kernel repository for download.
 #
 # Description: This script creates a custom, offline Rocky Linux 9 installer
 #              for ArttulOS. It embeds the ELRepo mainline kernel and a Kickstart
@@ -92,14 +92,13 @@ chmod -R u+w "${ISO_EXTRACT_DIR}" # Make files writable
 print_msg "blue" "Installing ELRepo release package..."
 dnf install -y https://www.elrepo.org/elrepo-release-9.el9.elrepo.noarch.rpm
 
-# --- FIX: Force DNF to update its cache ---
 print_msg "blue" "Clearing DNF cache and rebuilding repository metadata..."
 dnf clean all
 dnf makecache
-# --- END FIX ---
 
-print_msg "blue" "Downloading mainline kernel packages..."
-dnf download --resolve --arch=x86_64 \
+print_msg "blue" "Downloading mainline kernel packages from elrepo-kernel..."
+# --- FIX: Explicitly enable the elrepo-kernel repository for the download command ---
+dnf download --enablerepo=elrepo-kernel --resolve --arch=x86_64 \
 --downloaddir="${DOWNLOAD_DIR}" \
 kernel-ml kernel-ml-devel
 
@@ -203,7 +202,8 @@ genisoimage -o "/${FINAL_ISO_NAME}" \
 # Make the ISO bootable on UEFI systems
 isohybrid --uefi "/${FINAL_ISO_NAME}"
 cd ..
-chown $(logname):$(logname) "/${FINAL_ISO_NAME}"
+# Change ownership of the final ISO to the user who ran the script with sudo
+chown "$(logname)":"$(logname)" "/${FINAL_ISO_NAME}"
 
 print_msg "green" "Build complete!"
 echo -e "Your new ISO is located at: \e[1m${PWD}/${FINAL_ISO_NAME}\e[0m"
