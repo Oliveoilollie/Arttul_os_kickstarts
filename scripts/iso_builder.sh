@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v2.8 - Fixes dracut/initramfs issue)
+# ArttulOS ISO Build Script (FINAL v2.9 - The Definitive Dracut Fix)
 #
 # Description:
-# Creates a fully automated installer for a GNOME Desktop environment.
-# This version adds a forced 'dracut' rebuild in the %post section to
-# ensure the initramfs for the custom kernel is built correctly.
+# Creates a fully automated installer. This version fixes the "dracut-initqueue"
+# timeout by dynamically finding the new kernel version and explicitly telling
+# dracut to build the initramfs for THAT specific kernel.
 # ==============================================================================
 
 set -e
@@ -133,11 +133,17 @@ usermod -aG wheel ArttulOS
 echo "ArttulOS:arttulos" | chpasswd
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
 
-# --- FIX: Force a rebuild of the initramfs for the new kernel ---
-# This ensures all necessary drivers (LVM, disk, etc.) are included,
-# preventing the system from dropping to a dracut emergency shell on boot.
-echo "Forcing rebuild of dracut initramfs to include all drivers..."
-dracut --force --verbose
+# --- THE DEFINITIVE FIX FOR THE DRACUT TIMEOUT ERROR ---
+# 1. Dynamically get the exact version of the kernel-ml we just installed.
+echo "Finding newly installed kernel-ml version..."
+KERNEL_ML_VERSION=\$(rpm -q --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-ml)
+echo "Found kernel-ml: \$KERNEL_ML_VERSION"
+
+# 2. Force dracut to build the initramfs specifically for THAT kernel.
+# This ensures all necessary drivers (LVM, disk, etc.) are included.
+echo "Forcing rebuild of dracut initramfs for kernel-ml..."
+dracut --force --verbose /boot/initramfs-\${KERNEL_ML_VERSION}.img \${KERNEL_ML_VERSION}
+# --- END FIX ---
 
 # Set the ELRepo kernel as default
 grub2-set-default 0
