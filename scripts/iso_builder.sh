@@ -1,12 +1,12 @@
 #!/bin/bash
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v5.0 - The Definitive Fix)
+# ArttulOS ISO Build Script (FINAL v5.1 - Correct Repo Modification)
 #
 # Description:
-# - SOLVES "Error Checking Software Selection" by modifying the BaseOS
-#   repository metadata (comps.xml) to remove the mandatory kernel dependency,
-#   which is the true source of the conflict.
-# - Creates a fully automated, zero-touch installer that works reliably.
+# - SOLVES "Error Checking Software Selection" for good.
+# - The script now correctly locates the comps.xml.gz file within the AppStream
+#   repository, modifies it to remove the kernel dependency, and rebuilds the
+#   AppStream repo metadata. This fixes the root cause of the conflict.
 # ==============================================================================
 
 set -e
@@ -82,30 +82,42 @@ umount "${BUILD_DIR}/iso_mount"
 chmod -R u+w "${ISO_EXTRACT_DIR}"
 
 # ------------------------------------------------------------------------------
-# --- THE ACTUAL FIX: MODIFY REPOSITORY METADATA TO REMOVE KERNEL CONFLICT ---
+# --- THE ACTUAL FIX: MODIFY THE CORRECT REPOSITORY METADATA ---
 # ------------------------------------------------------------------------------
-print_msg "blue" "Modifying BaseOS repository to remove kernel conflicts..."
-ISO_BASEOS_DIR="${ISO_EXTRACT_DIR}/BaseOS"
-# Find the gzipped comps.xml file provided by the original repo
-COMPS_GZ=$(find "${ISO_BASEOS_DIR}/repodata/" -name "*-comps.xml.gz")
-if [ -z "$COMPS_GZ" ]; then
-    print_msg "red" "Could not find comps.xml.gz in the extracted ISO."
+print_msg "blue" "Searching for comps.xml file to modify..."
+# Search the entire extracted ISO for the comps file. This is robust.
+COMPS_GZ_PATH=$(find "${ISO_EXTRACT_DIR}" -path "*/repodata/*-comps.xml.gz" | head -n 1)
+
+if [ -z "$COMPS_GZ_PATH" ]; then
+    print_msg "red" "Could not find the *-comps.xml.gz file in the extracted ISO. Cannot proceed."
     exit 1
 fi
+
+# Determine the root directory of the repository containing the comps file (e.g., .../AppStream)
+REPO_DIR=$(dirname "$(dirname "$COMPS_GZ_PATH")")
+print_msg "blue" "Found comps file in ${REPO_DIR}. Modifying repository..."
+
 # Define the path for our new, uncompressed comps file
-MODIFIED_COMPS_XML="${ISO_EXTRACT_DIR}/comps.xml"
+MODIFIED_COMPS_XML="${BUILD_DIR}/comps.xml"
+
 # Unzip the original to our new location
-gunzip -c "$COMPS_GZ" > "$MODIFIED_COMPS_XML"
-# Use sed to find and DELETE all lines that require the default kernel or kernel-core.
+gunzip -c "$COMPS_GZ_PATH" > "$MODIFIED_COMPS_XML"
+
+# Use sed to find and DELETE all lines that require the default kernel.
 # This removes the mandatory dependency at the source.
-sed -i '/<packagereq>kernel-core<\/packagereq>/d' "$MODIFIED_COMPS_XML"
-sed -i '/<packagereq>kernel<\/packagereq>/d' "$MODIFIED_COMPS_XML"
+sed -i '/<packagereq type="mandatory">kernel-core<\/packagereq>/d' "$MODIFIED_COMPS_XML"
+sed -i '/<packagereq type="default">kernel-core<\/packagereq>/d' "$MODIFIED_COMPS_XML"
+sed -i '/<packagereq type="mandatory">kernel<\/packagereq>/d' "$MODIFIED_COMPS_XML"
+sed -i '/<packagereq type="default">kernel<\/packagereq>/d' "$MODIFIED_COMPS_XML"
 print_msg "green" "Removed mandatory kernel requirements from comps.xml."
-# IMPORTANT: Delete the old repodata directory. createrepo_c will build a new, clean one.
-rm -rf "${ISO_BASEOS_DIR}/repodata"
-# Rebuild the repository metadata using our MODIFIED comps.xml file.
-print_msg "blue" "Rebuilding BaseOS repository metadata..."
-createrepo_c -g "$MODIFIED_COMPS_XML" "$ISO_BASEOS_DIR"
+
+# IMPORTANT: Delete the old repodata directory from the CORRECT repository.
+rm -rf "${REPO_DIR}/repodata"
+print_msg "yellow" "Deleted old repodata from ${REPO_DIR}."
+
+# Rebuild the repository metadata for the CORRECT repository using our MODIFIED comps.xml.
+print_msg "blue" "Rebuilding repository metadata for ${REPO_DIR}..."
+createrepo_c -g "$MODIFIED_COMPS_XML" "$REPO_DIR"
 print_msg "green" "Repository metadata rebuilt successfully."
 # ------------------------------------------------------------------------------
 
@@ -113,7 +125,7 @@ print_msg "blue" "Injecting branding assets into the ISO structure..."
 mkdir -p "${ISO_EXTRACT_DIR}/branding"
 cp "${WALLPAPER_FILE}" "${ISO_EXTRACT_DIR}/branding/"
 
-print_msg "blue" "Copying kernel RPMs and creating simple custom repo..."
+print_msg "blue" "Copying kernel RPMs and creating custom repo..."
 cp "${PREP_KERNEL_DIR}"/*.rpm "${CUSTOM_REPO_DIR}/"
 createrepo_c "${CUSTOM_REPO_DIR}"
 
