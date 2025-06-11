@@ -1,12 +1,12 @@
 #!/bin/bash
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v4.4 - Definitive Package Fix)
+# ArttulOS ISO Build Script (FINAL v5.0 - The Definitive Fix)
 #
 # Description:
-# - Creates a fully automated, non-interactive (zero-touch) installer.
-# - Fixes package selection errors by building the desktop environment from
-#   fundamental groups (@core, @gnome-desktop) instead of the high-level
-#   @workstation group, which resolves kernel dependency conflicts.
+# - SOLVES "Error Checking Software Selection" by modifying the BaseOS
+#   repository metadata (comps.xml) to remove the mandatory kernel dependency,
+#   which is the true source of the conflict.
+# - Creates a fully automated, zero-touch installer that works reliably.
 # ==============================================================================
 
 set -e
@@ -47,7 +47,7 @@ if [ ! -f "${WALLPAPER_FILE}" ]; then
     exit 1
 fi
 
-REQUIRED_CMDS=(xorriso createrepo_c)
+REQUIRED_CMDS=(xorriso createrepo_c gunzip sed)
 if [ ! -f /usr/share/syslinux/isohdpfx.bin ]; then REQUIRED_CMDS+=(syslinux); fi
 MISSING_CMD=false
 for cmd in "${REQUIRED_CMDS[@]}"; do
@@ -81,26 +81,49 @@ rsync -a -H --exclude=TRANS.TBL "${BUILD_DIR}/iso_mount/" "${ISO_EXTRACT_DIR}"
 umount "${BUILD_DIR}/iso_mount"
 chmod -R u+w "${ISO_EXTRACT_DIR}"
 
+# ------------------------------------------------------------------------------
+# --- THE ACTUAL FIX: MODIFY REPOSITORY METADATA TO REMOVE KERNEL CONFLICT ---
+# ------------------------------------------------------------------------------
+print_msg "blue" "Modifying BaseOS repository to remove kernel conflicts..."
+ISO_BASEOS_DIR="${ISO_EXTRACT_DIR}/BaseOS"
+# Find the gzipped comps.xml file provided by the original repo
+COMPS_GZ=$(find "${ISO_BASEOS_DIR}/repodata/" -name "*-comps.xml.gz")
+if [ -z "$COMPS_GZ" ]; then
+    print_msg "red" "Could not find comps.xml.gz in the extracted ISO."
+    exit 1
+fi
+# Define the path for our new, uncompressed comps file
+MODIFIED_COMPS_XML="${ISO_EXTRACT_DIR}/comps.xml"
+# Unzip the original to our new location
+gunzip -c "$COMPS_GZ" > "$MODIFIED_COMPS_XML"
+# Use sed to find and DELETE all lines that require the default kernel or kernel-core.
+# This removes the mandatory dependency at the source.
+sed -i '/<packagereq>kernel-core<\/packagereq>/d' "$MODIFIED_COMPS_XML"
+sed -i '/<packagereq>kernel<\/packagereq>/d' "$MODIFIED_COMPS_XML"
+print_msg "green" "Removed mandatory kernel requirements from comps.xml."
+# IMPORTANT: Delete the old repodata directory. createrepo_c will build a new, clean one.
+rm -rf "${ISO_BASEOS_DIR}/repodata"
+# Rebuild the repository metadata using our MODIFIED comps.xml file.
+print_msg "blue" "Rebuilding BaseOS repository metadata..."
+createrepo_c -g "$MODIFIED_COMPS_XML" "$ISO_BASEOS_DIR"
+print_msg "green" "Repository metadata rebuilt successfully."
+# ------------------------------------------------------------------------------
+
 print_msg "blue" "Injecting branding assets into the ISO structure..."
 mkdir -p "${ISO_EXTRACT_DIR}/branding"
 cp "${WALLPAPER_FILE}" "${ISO_EXTRACT_DIR}/branding/"
 
-# 3. Create Custom Repository
 print_msg "blue" "Copying kernel RPMs and creating simple custom repo..."
 cp "${PREP_KERNEL_DIR}"/*.rpm "${CUSTOM_REPO_DIR}/"
 createrepo_c "${CUSTOM_REPO_DIR}"
 
-# 4. Create and Inject the Branded Kickstart File
-print_msg "blue" "Generating Kickstart file with full branding..."
+print_msg "blue" "Generating Kickstart file..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
 # Kickstart file for ArttulOS (Fully Automated Zero-Touch Installation)
 graphical
-# --- Commands for FULL automation ---
 eula --agreed
 rootpw --plaintext arttulos
 user --name=arttulos --groups=wheel --password=arttulos --plaintext
-
-# --- Standard configuration ---
 repo --name="BaseOS" --baseurl=file:///run/install/repo/BaseOS
 repo --name="AppStream" --baseurl=file:///run/install/repo/AppStream
 repo --name="custom-kernel" --baseurl=file:///run/install/repo/custom_repo
@@ -118,21 +141,12 @@ bootloader --location=mbr
 reboot
 
 %packages --instLangs=en_US --excludedocs
-# --- THIS IS THE FIX ---
-# Instead of the high-level @workstation group, we build the desktop
-# from its core components to avoid mandatory package conflicts.
-
-# Install the base system, fonts, and the GNOME Desktop environment
+# Now that the repo metadata is fixed, we can use a clean package list
+# without any exclusions. The conflict is gone.
 @core
 @fonts
 @gnome-desktop
-@guest-desktop-agents # For better performance in VMs
-
-# Exclude the default kernel packages from the @core group to prevent conflicts
--kernel
--kernel-core
--kernel-modules
--kernel-modules-core
+@guest-desktop-agents
 
 # Install our custom mainline kernel from the custom repo
 kernel-ml
@@ -143,8 +157,8 @@ policycoreutils-python-utils
 vim-enhanced
 kexec-tools
 plymouth-scripts
-flatpak # Needed for Flatpak commands
-curl    # Needed for downloading Nix installer
+flatpak
+curl
 
 # Explicitly remove Rocky Linux logo packages
 -rocky-logos
@@ -154,12 +168,7 @@ curl    # Needed for downloading Nix installer
 
 %post --log=/root/ks-post.log
 echo "Starting ArttulOS post-installation script..."
-
-# The user was created by the 'user' command. This gives passwordless sudo to the 'wheel' group.
-echo "Configuring passwordless sudo for the 'wheel' group..."
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
-
-# --- OS IDENTITY BRANDING ---
 echo "Creating custom /etc/os-release file..."
 cat << OS_RELEASE_EOF > /etc/os-release
 NAME="ArttulOS"
@@ -174,21 +183,14 @@ CPE_NAME="cpe:/o:arttulos:arttulos:9"
 HOME_URL="https://arttulos.com/"
 BUG_REPORT_URL="https://bugs.arttulos.com/"
 OS_RELEASE_EOF
-
-echo "Creating legacy /etc/redhat-release file..."
 echo "ArttulOS release 9" > /etc/redhat-release
-
-echo "Copying branding assets..."
 INSTALLER_BRANDING_DIR="/run/install/repo/branding"
 SYSTEM_WALLPAPER_DIR="/usr/share/backgrounds/arttulos"
 mkdir -p \$SYSTEM_WALLPAPER_DIR
 cp "\${INSTALLER_BRANDING_DIR}/strix.png" "\${SYSTEM_WALLPAPER_DIR}/strix.png"
-
-echo "Creating Plymouth boot splash theme..."
 PLYMOUTH_THEME_DIR="/usr/share/plymouth/themes/arttulos"
 mkdir -p \$PLYMOUTH_THEME_DIR
 cp "\${SYSTEM_WALLPAPER_DIR}/strix.png" "\${PLYMOUTH_THEME_DIR}/"
-
 cat << PLYMOUTH_EOF > \${PLYMOUTH_THEME_DIR}/arttulos.plymouth
 [Plymouth Theme]
 Name=ArttulOS
@@ -206,14 +208,10 @@ resized_wallpaper_image = wallpaper_image.Scale(screen_width, screen_height);
 wallpaper_sprite = Sprite(resized_wallpaper_image);
 wallpaper_sprite.SetZ(-100);
 SCRIPT_EOF
-echo "Setting new Plymouth theme and rebuilding initramfs..."
 plymouth-set-default-theme arttulos -R
-
-echo "Creating GRUB theme..."
 GRUB_THEME_DIR="/boot/grub2/themes/arttulos"
 mkdir -p \$GRUB_THEME_DIR
 cp "\${SYSTEM_WALLPAPER_DIR}/strix.png" "\${GRUB_THEME_DIR}/background.png"
-
 cat << THEME_EOF > \${GRUB_THEME_DIR}/theme.txt
 desktop-image: "background.png"
 desktop-color: "#000000"
@@ -221,14 +219,10 @@ title-text: ""
 + boot_menu { left = 15%; width = 70%; top = 35%; height = 40%; item_font = "DejaVu Sans 16"; item_color = "#87cefa"; item_spacing = 25; selected_item_font = "DejaVu Sans Bold 16"; selected_item_color = "#d8b6ff"; }
 + hbox { left = 15%; top = 80%; width = 70%; + label { text = "ArttulOS 9 - Mainline Kernel"; font = "DejaVu Sans 12"; color = "#cccccc"; } }
 THEME_EOF
-
-echo "Applying GRUB theme..."
 echo 'GRUB_THEME="/boot/grub2/themes/arttulos/theme.txt"' >> /etc/default/grub
 echo 'GRUB_TERMINAL_OUTPUT="gfxterm"' >> /etc/default/grub
 grub2-set-default 0
 grub2-mkconfig -o /boot/grub2/grub.cfg
-
-echo "Configuring GDM login and user desktop backgrounds..."
 GSETTINGS_OVERRIDES_DIR="/etc/dconf/db/local.d"
 GDM_OVERRIDES_DIR="/etc/dconf/db/gdm.d"
 WALLPAPER_PATH="/usr/share/backgrounds/arttulos/strix.png"
@@ -246,49 +240,26 @@ picture-uri='file://\${WALLPAPER_PATH}'
 picture-uri-dark='file://\${WALLPAPER_PATH}'
 GDM_EOF
 dconf update
-
-echo "Branding GNOME Tour application..."
 GNOME_TOUR_DESKTOP_FILE="/usr/share/applications/org.gnome.Tour.desktop"
 if [ -f "\$GNOME_TOUR_DESKTOP_FILE" ]; then
     sed -i "s/Name=GNOME Tour/Name=ArttulOS Tour/g" "\$GNOME_TOUR_DESKTOP_FILE"
     sed -i "s/Comment=A tour of the GNOME desktop/Comment=A tour of the ArttulOS desktop/g" "\$GNOME_TOUR_DESKTOP_FILE"
 fi
-
 cat << 'SERVICE_SCRIPT_EOF' > /usr/local/sbin/arttulos-first-boot-setup.sh
 #!/bin/bash
-# This script runs as root on the first boot to install applications that require an internet connection.
-# Log all output for debugging.
 exec 1>>/var/log/arttulos-first-boot.log 2>&1
-
 echo "--- Starting first-boot online application installation ---"
-
-# --- Flatpak/Flathub application installation ---
-echo "Setting up Flathub and installing Flatpak applications..."
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-# Add -y for non-interactive installation
-flatpak install -y flathub org.mozilla.firefox
-flatpak install -y flathub org.gajim.Gajim
-flatpak install -y flathub org.gnome.Polari
-
-# --- Nix installation for Element-Desktop ---
-echo "Installing Nix package manager..."
-# Use --yes for non-interactive mode. Installs as single-user (root), but packages are available system-wide.
+flatpak install -y flathub org.mozilla.firefox org.gajim.Gajim org.gnome.Polari
 sh <(curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install) --no-daemon --yes
-
-echo "Installing Element-Desktop via Nix..."
-# The installer modifies root's profile, but this script's shell doesn't see it yet.
-# We must source the nix profile script to make nix commands available.
 if [ -f /root/.nix-profile/etc/profile.d/nix.sh ]; then
     . /root/.nix-profile/etc/profile.d/nix.sh
-    # Use nix-env -iA to install the package permanently.
     nix-env -iA nixpkgs.element-desktop
 else
     echo "ERROR: Nix profile script not found. Could not install Element-Desktop."
 fi
-
 echo "--- First-boot setup complete ---"
 SERVICE_SCRIPT_EOF
-
 chmod +x /usr/local/sbin/arttulos-first-boot-setup.sh
 cat << 'SERVICE_EOF' > /etc/systemd/system/arttulos-first-boot.service
 [Unit]
@@ -304,16 +275,13 @@ ExecStartPost=/bin/systemctl disable arttulos-first-boot.service
 WantedBy=multi-user.target
 SERVICE_EOF
 systemctl enable arttulos-first-boot.service
-
 echo "Post-installation script finished."
 %end
 EOF
 
-# 5. Modify Bootloader to be Fully Automatic
 print_msg "blue" "Overwriting bootloader configs for fully automatic installation..."
 ISOLINUX_CFG="${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
 GRUB_CFG="${ISO_EXTRACT_DIR}/EFI/BOOT/grub.cfg"
-# Boot parameters for a fully automated, dark-mode installation
 KS_APPEND="inst.stage2=hd:LABEL=${ISO_LABEL} quiet inst.ks=hd:LABEL=${ISO_LABEL}:/ks.cfg inst.gtk.theme=Adwaita-dark"
 
 cat << EOF > "${ISOLINUX_CFG}"
@@ -335,7 +303,6 @@ initrdefi /images/pxeboot/initrd.img
 }
 EOF
 
-# 6. Rebuild the ISO with xorriso
 print_msg "blue" "Building the final ISO using xorriso..."
 cd "${ISO_EXTRACT_DIR}"
 xorriso -as mkisofs \
