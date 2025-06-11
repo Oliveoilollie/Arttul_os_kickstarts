@@ -1,14 +1,13 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL - xorriso version)
+# ArttulOS ISO Build Script (FINAL - Corrected xorriso version)
 #
-# Version: 2.0
+# Version: 2.1
 #
 # Description:
-# Creates a custom ArttulOS installer with NO internet access. It uses the
-# modern 'xorriso' tool to build a fully compatible hybrid ISO, avoiding
-# the problems with the older toolchain.
+# Creates a custom ArttulOS installer with NO internet access. It uses 'xorriso'
+# with the correct syslinux MBR for a fully compatible x86_64 hybrid ISO.
 # ==============================================================================
 
 set -e
@@ -42,14 +41,22 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# --- NEW: Self-installing dependencies ---
+# --- NEW: Self-installing correct dependencies ---
 REQUIRED_CMDS=(xorriso createrepo_c)
+if [ ! -f /usr/share/syslinux/isohdpfx.bin ]; then
+    # Check for the file directly, as the command name can vary.
+    REQUIRED_CMDS+=(syslinux) # A placeholder to trigger install
+fi
+
 MISSING_CMD=false
 for cmd in "${REQUIRED_CMDS[@]}"; do
-    if ! command -v "$cmd" &> /dev/null; then
+    # For 'syslinux', we check the file again. For others, the command.
+    if [ "$cmd" == "syslinux" ]; then
+        [ ! -f /usr/share/syslinux/isohdpfx.bin ] && MISSING_CMD=true
+    elif ! command -v "$cmd" &> /dev/null; then
         MISSING_CMD=true
-        break
     fi
+    [ "$MISSING_CMD" = true ] && break
 done
 
 if [ "$MISSING_CMD" = true ]; then
@@ -96,7 +103,7 @@ print_msg "blue" "Creating custom repository metadata..."
 createrepo_c "${CUSTOM_REPO_DIR}"
 
 # 4. Create and Inject the HYBRID Kickstart File
-# (The Kickstart file content is perfect, so it remains unchanged)
+# (The Kickstart file content is perfect and remains unchanged)
 print_msg "blue" "Generating and injecting the Kickstart file..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
 # Kickstart file for ArttulOS (Hybrid Install)
@@ -197,8 +204,8 @@ menuentry 'Install ArttulOS (Automated Kickstart)' --class red --class gnu-linux
 }
 EOF
 
-# 6. Rebuild the Bootable ISO using xorriso
-print_msg "blue" "Building the final ISO using xorriso (this will be warning-free)..."
+# 6. Rebuild the Bootable ISO using the CORRECT xorriso command
+print_msg "blue" "Building the final ISO using xorriso..."
 cd "${ISO_EXTRACT_DIR}"
 xorriso -as mkisofs \
   -V "${ISO_LABEL}" \
@@ -206,12 +213,10 @@ xorriso -as mkisofs \
   -b isolinux/isolinux.bin \
   -c isolinux/boot.cat \
   -no-emul-boot -boot-load-size 4 -boot-info-table \
-  --grub2-boot-info \
-  --grub2-mbr /usr/share/grub2/i386-pc/boot_hybrid.img \
   -eltorito-alt-boot \
   -e images/efiboot.img \
   -no-emul-boot \
-  -isohybrid-gpt-basdat \
+  -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin \
   .
 cd ..
 chown "$(logname)":"$(logname)" "/${FINAL_ISO_NAME}"
