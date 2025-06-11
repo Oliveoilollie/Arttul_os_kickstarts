@@ -1,13 +1,12 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v2.7 - GNOME Desktop Edition)
+# ArttulOS ISO Build Script (FINAL v2.8 - Fixes dracut/initramfs issue)
 #
 # Description:
 # Creates a fully automated installer for a GNOME Desktop environment.
-# - Installs the GNOME desktop offline.
-# - Sets username/password to arttulos/arttulos.
-# - On first boot, installs Gajim, Element, and Firefox from the internet.
+# This version adds a forced 'dracut' rebuild in the %post section to
+# ensure the initramfs for the custom kernel is built correctly.
 # ==============================================================================
 
 set -e
@@ -100,13 +99,9 @@ print_msg "blue" "Generating Kickstart file for GNOME Desktop installation..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
 # Kickstart file for ArttulOS (GNOME Desktop Edition)
 graphical
-
-# Define ALL repositories the installer needs
 repo --name="BaseOS" --baseurl=file:///run/install/repo/BaseOS
 repo --name="AppStream" --baseurl=file:///run/install/repo/AppStream
 repo --name="custom-kernel" --baseurl=file:///run/install/repo/custom_repo
-
-# Standard Kickstart commands
 lang en_US.UTF-8
 keyboard --vckeymap=us --xlayouts='us'
 timezone America/Los_Angeles --isUtc
@@ -114,10 +109,7 @@ network --onboot=yes --device=eth0 --bootproto=dhcp --ipv6=auto --activate
 network --hostname=arttulos.localdomain
 firewall --enabled --service=ssh
 selinux --enforcing
-
-# --- FIX: Set the root and user passwords directly ---
 rootpw --plaintext arttulos
-
 zerombr
 clearpart --all --initlabel
 autopart --type=lvm
@@ -125,14 +117,9 @@ bootloader --location=mbr
 reboot
 
 %packages --instLangs=en_US --excludedocs
-# --- FIX: Install the full GNOME desktop environment ---
 @workstation-product-environment
-
-# Install the custom kernel
 kernel-ml
 kernel-ml-devel
-
-# Other essential utilities
 policycoreutils-python-utils
 vim-enhanced
 kexec-tools
@@ -141,19 +128,26 @@ kexec-tools
 %post --log=/root/ks-post.log
 echo "Starting ArttulOS post-installation script..."
 
-# --- FIX: Create the 'ArttulOS' user with the predefined password ---
 useradd ArttulOS -c "ArttulOS Admin"
 usermod -aG wheel ArttulOS
 echo "ArttulOS:arttulos" | chpasswd
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
 
-# This script still creates the first-boot service to install online apps.
+# --- FIX: Force a rebuild of the initramfs for the new kernel ---
+# This ensures all necessary drivers (LVM, disk, etc.) are included,
+# preventing the system from dropping to a dracut emergency shell on boot.
+echo "Forcing rebuild of dracut initramfs to include all drivers..."
+dracut --force --verbose
+
+# Set the ELRepo kernel as default
+grub2-set-default 0
+
+# Create the first-boot service to install online apps
 cat << 'SCRIPT_EOF' > /usr/local/sbin/arttulos-first-boot-setup.sh
 #!/bin/bash
 LOG_FILE="/var/log/arttulos-first-boot.log"
 echo "--- ArttulOS First-Boot Setup Started at \$(date) ---" | tee -a \$LOG_FILE
 sleep 15
-# --- FIX: Install the requested desktop applications ---
 echo "Installing Firefox, Gajim, and Element..." | tee -a \$LOG_FILE
 dnf install -y firefox gajim element-desktop | tee -a \$LOG_FILE
 echo "Application installation complete." | tee -a \$LOG_FILE
@@ -183,9 +177,6 @@ ExecStartPost=/bin/systemctl disable arttulos-first-boot.service
 WantedBy=multi-user.target
 SERVICE_EOF
 systemctl enable arttulos-first-boot.service
-
-# Set the ELRepo kernel as default
-grub2-set-default 0
 
 echo "Post-installation script finished."
 %end
