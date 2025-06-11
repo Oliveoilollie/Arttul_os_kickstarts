@@ -1,11 +1,13 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v2.5 - Defines ALL Repos in Kickstart)
+# ArttulOS ISO Build Script (FINAL v2.7 - GNOME Desktop Edition)
 #
 # Description:
-# This version fixes the metadata error by correctly defining all required
-# repositories (BaseOS, AppStream, and custom) within the Kickstart file.
+# Creates a fully automated installer for a GNOME Desktop environment.
+# - Installs the GNOME desktop offline.
+# - Sets username/password to arttulos/arttulos.
+# - On first boot, installs Gajim, Element, and Firefox from the internet.
 # ==============================================================================
 
 set -e
@@ -16,7 +18,7 @@ PREP_TOOLS_DIR="build-tools-rpms"
 BUILD_DIR="arttulos-build"
 ISO_EXTRACT_DIR="${BUILD_DIR}/iso_extracted"
 CUSTOM_REPO_DIR="${ISO_EXTRACT_DIR}/custom_repo"
-FINAL_ISO_NAME="ArttulOS-9-Hybrid-Installer-Final.iso"
+FINAL_ISO_NAME="ArttulOS-9-GNOME-Desktop-Installer.iso"
 ISO_LABEL="ARTTULOS9"
 FINAL_ISO_PATH="${PWD}/${FINAL_ISO_NAME}"
 
@@ -55,7 +57,7 @@ for cmd in "${REQUIRED_CMDS[@]}"; do
 done
 
 if [ "$MISSING_CMD" = true ]; then
-    print_msg "yellow" "Build tools are missing. Attempting to install from local cache..."
+    print_msg "yellow" "Build tools are missing. Installing from local cache..."
     if [ ! -d "${PREP_TOOLS_DIR}" ] || [ -z "$(ls -A "${PREP_TOOLS_DIR}"/*.rpm 2>/dev/null)" ]; then
         print_msg "red" "The '${PREP_TOOLS_DIR}' directory is missing or empty."
         exit 1
@@ -91,16 +93,15 @@ chmod -R u+w "${ISO_EXTRACT_DIR}"
 # 3. Create Custom Repository
 print_msg "blue" "Copying kernel RPMs and creating simple custom repo..."
 cp "${PREP_KERNEL_DIR}"/*.rpm "${CUSTOM_REPO_DIR}/"
-# NO -g flag needed. Just a simple index of our packages.
 createrepo_c "${CUSTOM_REPO_DIR}"
 
-# 4. Create and Inject the CORRECT Kickstart File
-print_msg "blue" "Generating and injecting the Kickstart file..."
+# 4. Create and Inject the GNOME Desktop Kickstart File
+print_msg "blue" "Generating Kickstart file for GNOME Desktop installation..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
-# Kickstart file for ArttulOS (Hybrid Install)
+# Kickstart file for ArttulOS (GNOME Desktop Edition)
 graphical
 
-# --- FIX: Define ALL repositories the installer needs ---
+# Define ALL repositories the installer needs
 repo --name="BaseOS" --baseurl=file:///run/install/repo/BaseOS
 repo --name="AppStream" --baseurl=file:///run/install/repo/AppStream
 repo --name="custom-kernel" --baseurl=file:///run/install/repo/custom_repo
@@ -111,9 +112,12 @@ keyboard --vckeymap=us --xlayouts='us'
 timezone America/Los_Angeles --isUtc
 network --onboot=yes --device=eth0 --bootproto=dhcp --ipv6=auto --activate
 network --hostname=arttulos.localdomain
-rootpw --plaintext arttulos
 firewall --enabled --service=ssh
 selinux --enforcing
+
+# --- FIX: Set the root and user passwords directly ---
+rootpw --plaintext arttulos
+
 zerombr
 clearpart --all --initlabel
 autopart --type=lvm
@@ -121,10 +125,14 @@ bootloader --location=mbr
 reboot
 
 %packages --instLangs=en_US --excludedocs
-@core
-@server
+# --- FIX: Install the full GNOME desktop environment ---
+@workstation-product-environment
+
+# Install the custom kernel
 kernel-ml
 kernel-ml-devel
+
+# Other essential utilities
 policycoreutils-python-utils
 vim-enhanced
 kexec-tools
@@ -132,14 +140,23 @@ kexec-tools
 
 %post --log=/root/ks-post.log
 echo "Starting ArttulOS post-installation script..."
+
+# --- FIX: Create the 'ArttulOS' user with the predefined password ---
+useradd ArttulOS -c "ArttulOS Admin"
+usermod -aG wheel ArttulOS
+echo "ArttulOS:arttulos" | chpasswd
+echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
+
+# This script still creates the first-boot service to install online apps.
 cat << 'SCRIPT_EOF' > /usr/local/sbin/arttulos-first-boot-setup.sh
 #!/bin/bash
 LOG_FILE="/var/log/arttulos-first-boot.log"
 echo "--- ArttulOS First-Boot Setup Started at \$(date) ---" | tee -a \$LOG_FILE
 sleep 15
-echo "Starting package installation..." | tee -a \$LOG_FILE
-dnf install -y firefox git wget curl | tee -a \$LOG_FILE
-echo "Package installation complete." | tee -a \$LOG_FILE
+# --- FIX: Install the requested desktop applications ---
+echo "Installing Firefox, Gajim, and Element..." | tee -a \$LOG_FILE
+dnf install -y firefox gajim element-desktop | tee -a \$LOG_FILE
+echo "Application installation complete." | tee -a \$LOG_FILE
 cat << 'MOTD_EOF' > /etc/motd
 
             (Genesis for the Ascii)
@@ -154,7 +171,7 @@ SCRIPT_EOF
 chmod +x /usr/local/sbin/arttulos-first-boot-setup.sh
 cat << 'SERVICE_EOF' > /etc/systemd/system/arttulos-first-boot.service
 [Unit]
-Description=ArttulOS First-Boot Online Package Installer
+Description=ArttulOS First-Boot Online Application Installer
 After=network-online.target
 Wants=network-online.target
 [Service]
@@ -165,43 +182,26 @@ ExecStartPost=/bin/systemctl disable arttulos-first-boot.service
 [Install]
 WantedBy=multi-user.target
 SERVICE_EOF
-cat << 'MOTD_EOF' > /etc/motd
-
-            (Genesis for the Ascii)
-
-        Welcome to ArttulOS
-      This system is running a mainline kernel from ELRepo.
-      First boot setup is in progress. You can monitor in /var/log/arttulos-first-boot.log
-
-MOTD_EOF
 systemctl enable arttulos-first-boot.service
+
+# Set the ELRepo kernel as default
 grub2-set-default 0
-useradd ArttulOS -c "ArttulOS Admin"
-usermod -aG wheel ArttulOS
-echo "ArttulOS:arttulos" | chpasswd
-echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
+
 echo "Post-installation script finished."
 %end
 EOF
 
-# 5. Modify Bootloader Configs
-print_msg "blue" "Adding Kickstart option to bootloader configurations..."
+# 5. Modify Bootloader to be Fully Automatic
+print_msg "blue" "Modifying bootloader for fully automatic installation..."
 ISOLINUX_CFG="${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
-cat << EOF >> "${ISOLINUX_CFG}"
-
-label ks
-  menu label ^Install ArttulOS (Automated Kickstart)
-  kernel vmlinuz
-  append initrd=initrd.img inst.stage2=hd:LABEL=${ISO_LABEL} quiet inst.ks=hd:LABEL=${ISO_LABEL}:/ks.cfg
-EOF
 GRUB_CFG="${ISO_EXTRACT_DIR}/EFI/BOOT/grub.cfg"
-cat << EOF >> "${GRUB_CFG}"
+KS_APPEND="inst.stage2=hd:LABEL=${ISO_LABEL} quiet inst.ks=hd:LABEL=${ISO_LABEL}:/ks.cfg"
 
-menuentry 'Install ArttulOS (Automated Kickstart)' --class red --class gnu-linux --class gnu --class os {
-	linuxefi /images/pxeboot/vmlinuz inst.stage2=hd:LABEL=${ISO_LABEL} quiet inst.ks=hd:LABEL=${ISO_LABEL}:/ks.cfg
-	initrdefi /images/pxeboot/initrd.img
-}
-EOF
+sed -i 's/timeout 600/timeout 10/' "$ISOLINUX_CFG"
+sed -i "/menu label ^Install Rocky Linux 9/c\label arttulos\n  menu label ^Install ArttulOS\n  menu default\n  kernel vmlinuz\n  append initrd=initrd.img ${KS_APPEND}" "$ISOLINUX_CFG"
+sed -i '/menu label ^Test this media/d' "$ISOLINUX_CFG"
+sed -i '/menu label ^Troubleshooting/d' "$ISOLINUX_CFG"
+sed -i "s|linuxefi /images/pxeboot/vmlinuz inst.stage2=hd:LABEL=${ISO_LABEL} quiet|linuxefi /images/pxeboot/vmlinuz ${KS_APPEND}|" "$GRUB_CFG"
 
 # 6. Rebuild the ISO with xorriso
 print_msg "blue" "Building the final ISO using xorriso..."
