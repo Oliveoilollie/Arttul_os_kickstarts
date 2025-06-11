@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v2.9 - The Definitive Dracut Fix)
+# ArttulOS ISO Build Script (FINAL v3.0 - Definitive Dracut and Bootloader Fix)
 #
 # Description:
-# Creates a fully automated installer. This version fixes the "dracut-initqueue"
-# timeout by dynamically finding the new kernel version and explicitly telling
-# dracut to build the initramfs for THAT specific kernel.
+# This version fixes all previous errors by:
+# 1. Completely overwriting the bootloader configs to eliminate inst.stage2 errors.
+# 2. Using `dracut --regenerate-all` to build a correct initramfs for all kernels.
 # ==============================================================================
 
 set -e
@@ -42,33 +42,22 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 REQUIRED_CMDS=(xorriso createrepo_c)
-if [ ! -f /usr/share/syslinux/isohdpfx.bin ]; then
-    REQUIRED_CMDS+=(syslinux)
-fi
+if [ ! -f /usr/share/syslinux/isohdpfx.bin ]; then REQUIRED_CMDS+=(syslinux); fi
 MISSING_CMD=false
 for cmd in "${REQUIRED_CMDS[@]}"; do
-    if [ "$cmd" == "syslinux" ]; then
-        [ ! -f /usr/share/syslinux/isohdpfx.bin ] && MISSING_CMD=true
-    elif ! command -v "$cmd" &> /dev/null; then
-        MISSING_CMD=true
-    fi
+    if [ "$cmd" == "syslinux" ] && [ ! -f /usr/share/syslinux/isohdpfx.bin ]; then MISSING_CMD=true;
+    elif ! command -v "$cmd" &> /dev/null; then MISSING_CMD=true; fi
     [ "$MISSING_CMD" = true ] && break
 done
 
 if [ "$MISSING_CMD" = true ]; then
     print_msg "yellow" "Build tools are missing. Installing from local cache..."
-    if [ ! -d "${PREP_TOOLS_DIR}" ] || [ -z "$(ls -A "${PREP_TOOLS_DIR}"/*.rpm 2>/dev/null)" ]; then
-        print_msg "red" "The '${PREP_TOOLS_DIR}' directory is missing or empty."
-        exit 1
-    fi
+    if [ ! -d "${PREP_TOOLS_DIR}" ] || [ -z "$(ls -A "${PREP_TOOLS_DIR}"/*.rpm 2>/dev/null)" ]; then print_msg "red" "The '${PREP_TOOLS_DIR}' directory is missing or empty." && exit 1; fi
     dnf install -y ./${PREP_TOOLS_DIR}/*.rpm
     print_msg "green" "Build tools installed."
 fi
 
-if [ ! -d "${PREP_KERNEL_DIR}" ] || [ -z "$(ls -A "${PREP_KERNEL_DIR}"/*.rpm 2>/dev/null)" ]; then
-    print_msg "red" "The '${PREP_KERNEL_DIR}' directory is missing or empty."
-    exit 1
-fi
+if [ ! -d "${PREP_KERNEL_DIR}" ] || [ -z "$(ls -A "${PREP_KERNEL_DIR}"/*.rpm 2>/dev/null)" ]; then print_msg "red" "The '${PREP_KERNEL_DIR}' directory is missing or empty." && exit 1; fi
 
 print_msg "blue" "Cleaning up previous build..."
 umount "${BUILD_DIR}/iso_mount" &>/dev/null || true
@@ -79,10 +68,7 @@ mkdir -p "${BUILD_DIR}/iso_mount" "${ISO_EXTRACT_DIR}" "${CUSTOM_REPO_DIR}"
 
 # 2. Extract Base ISO
 read -p "Please enter the full path to the official Rocky Linux 9 DVD ISO file: " BASE_ISO_PATH
-if [ ! -f "$BASE_ISO_PATH" ]; then
-    print_msg "red" "ISO file not found at '${BASE_ISO_PATH}'."
-    exit 1
-fi
+if [ ! -f "$BASE_ISO_PATH" ]; then print_msg "red" "ISO file not found at '${BASE_ISO_PATH}'." && exit 1; fi
 print_msg "blue" "Mounting and extracting the base ISO..."
 mount -o loop,ro "$BASE_ISO_PATH" "${BUILD_DIR}/iso_mount"
 rsync -a -H --exclude=TRANS.TBL "${BUILD_DIR}/iso_mount/" "${ISO_EXTRACT_DIR}"
@@ -94,7 +80,7 @@ print_msg "blue" "Copying kernel RPMs and creating simple custom repo..."
 cp "${PREP_KERNEL_DIR}"/*.rpm "${CUSTOM_REPO_DIR}/"
 createrepo_c "${CUSTOM_REPO_DIR}"
 
-# 4. Create and Inject the GNOME Desktop Kickstart File
+# 4. Create and Inject the Kickstart File
 print_msg "blue" "Generating Kickstart file for GNOME Desktop installation..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
 # Kickstart file for ArttulOS (GNOME Desktop Edition)
@@ -134,16 +120,10 @@ echo "ArttulOS:arttulos" | chpasswd
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
 
 # --- THE DEFINITIVE FIX FOR THE DRACUT TIMEOUT ERROR ---
-# 1. Dynamically get the exact version of the kernel-ml we just installed.
-echo "Finding newly installed kernel-ml version..."
-KERNEL_ML_VERSION=\$(rpm -q --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-ml)
-echo "Found kernel-ml: \$KERNEL_ML_VERSION"
-
-# 2. Force dracut to build the initramfs specifically for THAT kernel.
-# This ensures all necessary drivers (LVM, disk, etc.) are included.
-echo "Forcing rebuild of dracut initramfs for kernel-ml..."
-dracut --force --verbose /boot/initramfs-\${KERNEL_ML_VERSION}.img \${KERNEL_ML_VERSION}
-# --- END FIX ---
+# Regenerate the initramfs for ALL installed kernels. This is the most
+# robust method to ensure the correct drivers are included for the custom kernel.
+echo "Forcing rebuild of all dracut initramfs images..."
+dracut --regenerate-all --force --verbose
 
 # Set the ELRepo kernel as default
 grub2-set-default 0
@@ -189,16 +169,31 @@ echo "Post-installation script finished."
 EOF
 
 # 5. Modify Bootloader to be Fully Automatic
-print_msg "blue" "Modifying bootloader for fully automatic installation..."
+print_msg "blue" "Overwriting bootloader configs for fully automatic installation..."
 ISOLINUX_CFG="${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
 GRUB_CFG="${ISO_EXTRACT_DIR}/EFI/BOOT/grub.cfg"
 KS_APPEND="inst.stage2=hd:LABEL=${ISO_LABEL} quiet inst.ks=hd:LABEL=${ISO_LABEL}:/ks.cfg"
 
-sed -i 's/timeout 600/timeout 10/' "$ISOLINUX_CFG"
-sed -i "/menu label ^Install Rocky Linux 9/c\label arttulos\n  menu label ^Install ArttulOS\n  menu default\n  kernel vmlinuz\n  append initrd=initrd.img ${KS_APPEND}" "$ISOLINUX_CFG"
-sed -i '/menu label ^Test this media/d' "$ISOLINUX_CFG"
-sed -i '/menu label ^Troubleshooting/d' "$ISOLINUX_CFG"
-sed -i "s|linuxefi /images/pxeboot/vmlinuz inst.stage2=hd:LABEL=${ISO_LABEL} quiet|linuxefi /images/pxeboot/vmlinuz ${KS_APPEND}|" "$GRUB_CFG"
+# --- FIX: Overwrite the Legacy BIOS boot config (isolinux.cfg) ---
+cat << EOF > "${ISOLINUX_CFG}"
+default vesamenu.c32
+timeout 10
+menu title ArttulOS 9 Installer
+label install
+  menu label ^Install ArttulOS
+  menu default
+  kernel vmlinuz
+  append initrd=initrd.img ${KS_APPEND}
+EOF
+
+# --- FIX: Overwrite the UEFI boot config (grub.cfg) ---
+cat << EOF > "${GRUB_CFG}"
+set timeout=1
+menuentry 'Install ArttulOS' --class gnu-linux --class gnu --class os {
+	linuxefi /images/pxeboot/vmlinuz ${KS_APPEND}
+	initrdefi /images/pxeboot/initrd.img
+}
+EOF
 
 # 6. Rebuild the ISO with xorriso
 print_msg "blue" "Building the final ISO using xorriso..."
