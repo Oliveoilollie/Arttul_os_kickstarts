@@ -1,12 +1,11 @@
 #!/bin/bash
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v3.8 - Hide Software Selection)
+# ArttulOS ISO Build Script (FINAL v4.0 - Interactive User Creation)
 #
 # Description:
-# - Removes all user-facing "Rocky Linux" branding from within GNOME.
-# - Implements a custom GRUB theme and Plymouth boot splash.
-# - Creates a fully automated installer for a fully branded GNOME Desktop.
-# - Hides the "Software Selection" screen in the Anaconda installer.
+# - Automates all installation steps (disk, timezone, etc.) via Kickstart.
+# - The installer only stops to prompt the user for their username and password.
+# - Implements full OS identity, GRUB, and Plymouth branding.
 # ==============================================================================
 
 set -e
@@ -93,10 +92,15 @@ createrepo_c "${CUSTOM_REPO_DIR}"
 # 4. Create and Inject the Branded Kickstart File
 print_msg "blue" "Generating Kickstart file with full branding..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
-# Kickstart file for ArttulOS (GNOME Desktop Edition with Full Branding)
+# Kickstart file for ArttulOS (Semi-Automated: Interactive User Creation)
 graphical
-# --- THIS LINE HIDES THE SOFTWARE SELECTION SCREEN ---
-autostep --skip=packages
+# --- This command skips the EULA/hub screen ---
+eula --agreed
+
+# --- By OMITTING the 'user' and 'rootpw' commands, Anaconda is forced to stop
+# and prompt the user for this information. All other sections are automated.
+
+# --- Standard configuration ---
 repo --name="BaseOS" --baseurl=file:///run/install/repo/BaseOS
 repo --name="AppStream" --baseurl=file:///run/install/repo/AppStream
 repo --name="custom-kernel" --baseurl=file:///run/install/repo/custom_repo
@@ -107,7 +111,6 @@ network --onboot=yes --device=eth0 --bootproto=dhcp --ipv6=auto --activate
 network --hostname=arttulos.localdomain
 firewall --enabled --service=ssh
 selinux --enforcing
-rootpw --plaintext arttulos
 zerombr
 clearpart --all --initlabel
 autopart --type=lvm
@@ -134,14 +137,13 @@ curl    # Needed for downloading Nix installer
 %post --log=/root/ks-post.log
 echo "Starting ArttulOS post-installation script..."
 
-echo "Creating user 'arttulos'..."
-useradd arttulos -c "ArttulOS User"
-usermod -aG wheel arttulos
-echo "arttulos:arttulos" | chpasswd
+# The user is created interactively by Anaconda.
+# If they check "Make this user administrator", they are added to the 'wheel' group.
+# This line gives passwordless sudo privileges to that group.
+echo "Configuring passwordless sudo for the 'wheel' group..."
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
 
-# --- 6. OS IDENTITY BRANDING ---
-# This is the most important step to remove "Rocky Linux" from the OS itself.
+# --- OS IDENTITY BRANDING ---
 echo "Creating custom /etc/os-release file..."
 cat << OS_RELEASE_EOF > /etc/os-release
 NAME="ArttulOS"
