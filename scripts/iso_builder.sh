@@ -4,7 +4,7 @@
 #
 # Description:
 # - Removes all user-facing "Rocky Linux" branding from within GNOME by
-#   creating a custom /etc/os-release file and removing rocky-logos.
+#   creating a custom /etc/os-release file and removing rocky-logos.
 # - Implements a custom GRUB theme and Plymouth boot splash.
 # - Creates a fully automated installer for a fully branded GNOME Desktop.
 # ==============================================================================
@@ -24,43 +24,43 @@ FINAL_ISO_PATH="${PWD}/${FINAL_ISO_NAME}"
 
 # --- Functions ---
 print_msg() {
-    local color=$1
-    local message=$2
-    case "$color" in
-        "green") echo -e "\n\e[32m[SUCCESS]\e[0m ${message}" ;;
-        "blue") echo -e "\n\e[34m[INFO]\e[0m ${message}" ;;
-        "yellow") echo -e "\n\e[33m[WARN]\e[0m ${message}" ;;
-        "red") echo -e "\n\e[31m[ERROR]\e[0m ${message}" >&2 ;;
-    esac
+    local color=$1
+    local message=$2
+    case "$color" in
+        "green") echo -e "\n\e[32m[SUCCESS]\e[0m ${message}" ;;
+        "blue") echo -e "\n\e[34m[INFO]\e[0m ${message}" ;;
+        "yellow") echo -e "\n\e[33m[WARN]\e[0m ${message}" ;;
+        "red") echo -e "\n\e[31m[ERROR]\e[0m ${message}" >&2 ;;
+    esac
 }
 
 # --- Main Script ---
 
 # 1. Initial Checks and Setup
 if [ "$EUID" -ne 0 ]; then
-  print_msg "red" "This script must be run as root. Please use sudo."
-  exit 1
+  print_msg "red" "This script must be run as root. Please use sudo."
+  exit 1
 fi
 
 if [ ! -f "${WALLPAPER_FILE}" ]; then
-    print_msg "red" "Branding file not found. Please place '${WALLPAPER_FILE}' in the same directory as this script."
-    exit 1
+    print_msg "red" "Branding file not found. Please place '${WALLPAPER_FILE}' in the same directory as this script."
+    exit 1
 fi
 
 REQUIRED_CMDS=(xorriso createrepo_c)
 if [ ! -f /usr/share/syslinux/isohdpfx.bin ]; then REQUIRED_CMDS+=(syslinux); fi
 MISSING_CMD=false
 for cmd in "${REQUIRED_CMDS[@]}"; do
-    if [ "$cmd" == "syslinux" ] && [ ! -f /usr/share/syslinux/isohdpfx.bin ]; then MISSING_CMD=true;
-    elif ! command -v "$cmd" &> /dev/null; then MISSING_CMD=true; fi
-    [ "$MISSING_CMD" = true ] && break
+    if [ "$cmd" == "syslinux" ] && [ ! -f /usr/share/syslinux/isohdpfx.bin ]; then MISSING_CMD=true;
+    elif ! command -v "$cmd" &> /dev/null; then MISSING_CMD=true; fi
+    [ "$MISSING_CMD" = true ] && break
 done
 
 if [ "$MISSING_CMD" = true ]; then
-    print_msg "yellow" "Build tools are missing. Installing from local cache..."
-    if [ ! -d "${PREP_TOOLS_DIR}" ] || [ -z "$(ls -A "${PREP_TOOLS_DIR}"/*.rpm 2>/dev/null)" ]; then print_msg "red" "The '${PREP_TOOLS_DIR}' directory is missing or empty." && exit 1; fi
-    dnf install -y ./${PREP_TOOLS_DIR}/*.rpm
-    print_msg "green" "Build tools installed."
+    print_msg "yellow" "Build tools are missing. Installing from local cache..."
+    if [ ! -d "${PREP_TOOLS_DIR}" ] || [ -z "$(ls -A "${PREP_TOOLS_DIR}"/*.rpm 2>/dev/null)" ]; then print_msg "red" "The '${PREP_TOOLS_DIR}' directory is missing or empty." && exit 1; fi
+    dnf install -y ./${PREP_TOOLS_DIR}/*.rpm
+    print_msg "green" "Build tools installed."
 fi
 
 if [ ! -d "${PREP_KERNEL_DIR}" ] || [ -z "$(ls -A "${PREP_KERNEL_DIR}"/*.rpm 2>/dev/null)" ]; then print_msg "red" "The '${PREP_KERNEL_DIR}' directory is missing or empty." && exit 1; fi
@@ -121,7 +121,7 @@ vim-enhanced
 kexec-tools
 plymouth-scripts
 flatpak # Needed for Flatpak commands
-curl    # Needed for downloading Nix installer
+curl    # Needed for downloading Nix installer
 
 # --- FIX: Explicitly remove Rocky Linux logo packages ---
 -rocky-logos
@@ -230,8 +230,8 @@ dconf update
 echo "Branding GNOME Tour application..."
 GNOME_TOUR_DESKTOP_FILE="/usr/share/applications/org.gnome.Tour.desktop"
 if [ -f "\$GNOME_TOUR_DESKTOP_FILE" ]; then
-    sed -i "s/Name=GNOME Tour/Name=ArttulOS Tour/g" "\$GNOME_TOUR_DESKTOP_FILE"
-    sed -i "s/Comment=A tour of the GNOME desktop/Comment=A tour of the ArttulOS desktop/g" "\$GNOME_TOUR_DESKTOP_FILE"
+    sed -i "s/Name=GNOME Tour/Name=ArttulOS Tour/g" "\$GNOME_TOUR_DESKTOP_FILE"
+    sed -i "s/Comment=A tour of the GNOME desktop/Comment=A tour of the ArttulOS desktop/g" "\$GNOME_TOUR_DESKTOP_FILE"
 fi
 
 cat << 'SERVICE_SCRIPT_EOF' > /usr/local/sbin/arttulos-first-boot-setup.sh
@@ -259,11 +259,11 @@ echo "Installing Element-Desktop via Nix..."
 # The installer modifies root's profile, but this script's shell doesn't see it yet.
 # We must source the nix profile script to make nix commands available.
 if [ -f /root/.nix-profile/etc/profile.d/nix.sh ]; then
-    . /root/.nix-profile/etc/profile.d/nix.sh
-    # Use nix-env -iA to install the package permanently.
-    nix-env -iA nixpkgs.element-desktop
+    . /root/.nix-profile/etc/profile.d/nix.sh
+    # Use nix-env -iA to install the package permanently.
+    nix-env -iA nixpkgs.element-desktop
 else
-    echo "ERROR: Nix profile script not found. Could not install Element-Desktop."
+    echo "ERROR: Nix profile script not found. Could not install Element-Desktop."
 fi
 
 echo "--- First-boot setup complete ---"
@@ -300,10 +300,10 @@ default vesamenu.c32
 timeout 10
 menu title ArttulOS 9 Installer
 label install
-  menu label ^Install ArttulOS
-  menu default
-  kernel vmlinuz
-  append initrd=initrd.img ${KS_APPEND}
+  menu label ^Install ArttulOS
+  menu default
+  kernel vmlinuz
+  append initrd=initrd.img ${KS_APPEND}
 EOF
 
 cat << EOF > "${GRUB_CFG}"
@@ -318,16 +318,16 @@ EOF
 print_msg "blue" "Building the final ISO using xorriso..."
 cd "${ISO_EXTRACT_DIR}"
 xorriso -as mkisofs \
-  -V "${ISO_LABEL}" \
-  -o "${FINAL_ISO_PATH}" \
-  -b isolinux/isolinux.bin \
-  -c isolinux/boot.cat \
-  -no-emul-boot -boot-load-size 4 -boot-info-table \
-  -eltorito-alt-boot \
-  -e images/efiboot.img \
-  -no-emul-boot \
-  -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin \
-  .
+  -V "${ISO_LABEL}" \
+  -o "${FINAL_ISO_PATH}" \
+  -b isolinux/isolinux.bin \
+  -c isolinux/boot.cat \
+  -no-emul-boot -boot-load-size 4 -boot-info-table \
+  -eltorito-alt-boot \
+  -e images/efiboot.img \
+  -no-emul-boot \
+  -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin \
+  .
 cd ..
 chown "$(logname)":"$(logname)" "${FINAL_ISO_PATH}"
 
