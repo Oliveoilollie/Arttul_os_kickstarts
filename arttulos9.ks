@@ -1,12 +1,16 @@
-# Kickstart file for ArttulOS 9 (based on Rocky Linux 9)
-# Version: 1.2 - Added ELRepo and mainline kernel installation
+# Kickstart file for ArttulOS
+# Version: 1.7 - Dynamically finds the boot drive.
+#
+# SECURITY WARNING: Plaintext passwords are used. Change them immediately after installation.
+# Default User: ArttulOS
+# Default Pass: arttulos
 
 #====================================================
 # 1. System Installation & Localization
 #====================================================
 
-# Use text mode installation
-text
+# Use graphical mode installation
+graphical
 
 # Use CD/DVD or network URL for installation source
 # Official Rocky Linux repositories
@@ -27,13 +31,10 @@ timezone America/Los_Angeles --isUtc
 
 # Network information - Use DHCP on the first ethernet device
 network --onboot=yes --device=eth0 --bootproto=dhcp --ipv6=auto --activate
-network --hostname=arttulos9.localdomain
+network --hostname=arttulos.localdomain
 
-# Root password - THIS IS A PLACEHOLDER!
-# Generate your own strong, encrypted password with:
-# openssl passwd -6 'your-strong-password'
-# Then replace the entire line below.
-rootpw --iscrypted $6$SbsO0Ll9y.AWrooe$PEcHjlZjJdzwVFDzW0Vk.B1XbhHVR3qTNpREhhM/PjjlJnE1b2zBb/C0gM0uvDnr6VV4YNlEj6SW8x7yIktt90
+# Root password - INSECURE! Change this after installation.
+rootpw --plaintext arttulos
 
 # Firewall configuration - Enabled by default, allowing SSH traffic
 firewall --enabled --service=ssh
@@ -52,8 +53,8 @@ clearpart --all --initlabel
 # Use automated LVM partitioning for simplicity and flexibility
 autopart --type=lvm
 
-# Bootloader configuration
-bootloader --location=mbr --boot-drive=sda
+# Bootloader configuration - The installer will automatically find the boot drive.
+bootloader --location=mbr
 
 # Reboot the system after installation is complete
 reboot
@@ -93,7 +94,7 @@ element-desktop
 #====================================================
 %post --log=/root/ks-post.log
 
-echo "Starting ArttulOS 9 post-installation script..."
+echo "Starting ArttulOS post-installation script..."
 
 # --- System Configuration ---
 # Set the newly installed ELRepo kernel as the default for the next boot.
@@ -101,51 +102,39 @@ echo "Starting ArttulOS 9 post-installation script..."
 echo "Setting default kernel to the new ELRepo kernel..."
 grub2-set-default 0
 
-# --- ArttulOS 9 Branding ---
+# --- ArttulOS Branding ---
 # Set the Message of the Day (MOTD)
 cat << EOF > /etc/motd
 
             (Genesis for the Ascii)
 
-        Welcome to ArttulOS 9 (Rocky Linux 9 Base)
+        Welcome to ArttulOS
       This system is running a mainline kernel from ELRepo.
 
 EOF
 
 # Set the pre-login issue message
-echo "ArttulOS 9" > /etc/issue
-echo "ArttulOS 9" > /etc/issue.net
+echo "ArttulOS" > /etc/issue
+echo "ArttulOS" > /etc/issue.net
 
 
 # --- User & SSH Security Hardening ---
-# Create a new admin user 'arttu'
-echo "Creating admin user 'arttu'..."
-useradd arttu -c "Arttu Admin"
-usermod -aG wheel arttu
+# Create a new admin user 'ArttulOS'
+echo "Creating admin user 'ArttulOS'..."
+useradd ArttulOS -c "ArttulOS Admin"
+usermod -aG wheel ArttulOS
 
-# Set a placeholder password for the 'arttu' user.
-echo "arttu:YourPasswordHere" | chpasswd
+# Set a default password for the 'ArttulOS' user.
+# !! CRUCIAL: Change this password immediately after first login! !!
+echo "ArttulOS:arttulos" | chpasswd
 
 # Configure sudo for the 'wheel' group
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
 
-# Set up SSH key-based authentication for the 'arttu' user
-# !! CRUCIAL: Replace the public key below with YOUR OWN public key !!
-echo "Setting up SSH key for 'arttu' user..."
-mkdir -p /home/arttu/.ssh
-cat << EOF > /home/arttu/.ssh/authorized_keys
-ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC...your...actual...public...key...goes...here user@machine
-EOF
-
-# Set correct permissions
-chmod 700 /home/arttu/.ssh
-chmod 600 /home/arttu/.ssh/authorized_keys
-chown -R arttu:arttu /home/arttu/.ssh
-
 # Harden the SSH daemon configuration
 echo "Hardening SSH configuration..."
 sed -i 's/.*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-sed -i 's/.*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/.*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
 sed -i 's/^#PasswordAuthentication/PasswordAuthentication/' /etc/ssh/sshd_config
 
 echo "Post-installation script finished."
