@@ -1,12 +1,11 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v3.2 - Corrected Credentials)
+# ArttulOS ISO Build Script (FINAL v3.3 - Corrected Wallpaper Path)
 #
 # Description:
-# - Sets the username and password correctly to 'arttulos' for both.
-# - Implements full ArttulOS branding: Plymouth boot splash, login screen,
-#   and desktop wallpaper using the provided 'scripts/strix.png' file.
+# - Looks for 'strix.png' in the same directory as the script.
+# - Implements full ArttulOS branding and automated installation.
 # ==============================================================================
 
 set -e
@@ -17,8 +16,7 @@ PREP_TOOLS_DIR="build-tools-rpms"
 BUILD_DIR="arttulos-build"
 ISO_EXTRACT_DIR="${BUILD_DIR}/iso_extracted"
 CUSTOM_REPO_DIR="${ISO_EXTRACT_DIR}/custom_repo"
-BRANDING_DIR="scripts"
-WALLPAPER_FILE="strix.png"
+WALLPAPER_FILE="strix.png" # <-- The wallpaper file itself
 FINAL_ISO_NAME="ArttulOS-9-GNOME-Branded-Installer.iso"
 ISO_LABEL="ARTTULOS9"
 FINAL_ISO_PATH="${PWD}/${FINAL_ISO_NAME}"
@@ -43,8 +41,9 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-if [ ! -f "${BRANDING_DIR}/${WALLPAPER_FILE}" ]; then
-    print_msg "red" "Branding file not found at '${BRANDING_DIR}/${WALLPAPER_FILE}'."
+# --- FIX: Check for branding asset in the CURRENT directory ---
+if [ ! -f "${WALLPAPER_FILE}" ]; then
+    print_msg "red" "Branding file not found. Please place '${WALLPAPER_FILE}' in the same directory as this script."
     exit 1
 fi
 
@@ -84,7 +83,8 @@ chmod -R u+w "${ISO_EXTRACT_DIR}"
 
 print_msg "blue" "Injecting branding assets into the ISO structure..."
 mkdir -p "${ISO_EXTRACT_DIR}/branding"
-cp "${BRANDING_DIR}/${WALLPAPER_FILE}" "${ISO_EXTRACT_DIR}/branding/"
+# --- FIX: Copy the wallpaper from the CURRENT directory ---
+cp "${WALLPAPER_FILE}" "${ISO_EXTRACT_DIR}/branding/"
 
 # 3. Create Custom Repository
 print_msg "blue" "Copying kernel RPMs and creating simple custom repo..."
@@ -126,21 +126,18 @@ plymouth-scripts
 %post --log=/root/ks-post.log
 echo "Starting ArttulOS post-installation script..."
 
-# --- FIX: Create the 'arttulos' user with the correct password ---
 echo "Creating user 'arttulos'..."
 useradd arttulos -c "ArttulOS User"
 usermod -aG wheel arttulos
 echo "arttulos:arttulos" | chpasswd
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
 
-# --- 1. COPY BRANDING ASSETS ---
 echo "Copying branding assets..."
 INSTALLER_BRANDING_DIR="/run/install/repo/branding"
 SYSTEM_WALLPAPER_DIR="/usr/share/backgrounds/arttulos"
 mkdir -p \$SYSTEM_WALLPAPER_DIR
 cp "\${INSTALLER_BRANDING_DIR}/strix.png" "\${SYSTEM_WALLPAPER_DIR}/strix.png"
 
-# --- 2. CREATE AND SET PLYMOUTH BOOT THEME ---
 echo "Creating Plymouth boot splash theme..."
 PLYMOUTH_THEME_DIR="/usr/share/plymouth/themes/arttulos"
 mkdir -p \$PLYMOUTH_THEME_DIR
@@ -169,7 +166,6 @@ SCRIPT_EOF
 echo "Setting new Plymouth theme and rebuilding initramfs..."
 plymouth-set-default-theme arttulos -R
 
-# --- 3. SET GNOME DESKTOP AND LOGIN WALLPAPER ---
 echo "Configuring GDM login and user desktop backgrounds..."
 GSETTINGS_OVERRIDES_DIR="/etc/dconf/db/local.d"
 GDM_OVERRIDES_DIR="/etc/dconf/db/gdm.d"
@@ -195,10 +191,8 @@ GDM_EOF
 
 dconf update
 
-# Set the ELRepo kernel as default
 grub2-set-default 0
 
-# Create the first-boot service to install online apps
 cat << 'SERVICE_SCRIPT_EOF' > /usr/local/sbin/arttulos-first-boot-setup.sh
 #!/bin/bash
 dnf install -y firefox gajim element-desktop
