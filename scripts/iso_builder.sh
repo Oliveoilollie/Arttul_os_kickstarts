@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v2.3 - Fixes Metadata Error)
+# ArttulOS ISO Build Script (FINAL v2.4 - Correctly Locates comps.xml)
 #
 # Description:
-# Correctly generates repository group metadata (-comps.xml) to fix the
-# "Insufficient metadata on installation media" error.
+# This version fixes the critical "Could not find a comps.xml" error by using a
+# precise path to locate the group metadata file within the extracted ISO.
 # ==============================================================================
 
 set -e
@@ -94,25 +94,32 @@ chmod -R u+w "${ISO_EXTRACT_DIR}"
 print_msg "blue" "Copying pre-downloaded kernel RPMs into the ISO structure..."
 cp "${PREP_KERNEL_DIR}"/*.rpm "${CUSTOM_REPO_DIR}/"
 
-# --- FIX: Copy the group metadata file from the official repo ---
-print_msg "blue" "Copying group metadata (comps.xml) to custom repo..."
-COMPS_FILE=$(find "${ISO_EXTRACT_DIR}/" -path '*/repodata/*-comps.xml' | head -n 1)
-if [ -z "$COMPS_FILE" ]; then
-    print_msg "red" "Could not find a comps.xml file in the extracted ISO. Cannot proceed."
+# --- FIX: Precisely locate and copy the group metadata file ---
+print_msg "blue" "Locating and copying group metadata (comps.xml)..."
+# The comps file is in the BaseOS repository. The glob handles the hash in the filename.
+COMPS_FILE_GLOB="${ISO_EXTRACT_DIR}/BaseOS/repodata/*-comps.xml"
+# Use an array to safely capture the glob expansion
+comps_files=($COMPS_FILE_GLOB)
+COMPS_FILE="${comps_files[0]}"
+
+if [ ! -f "$COMPS_FILE" ]; then
+    print_msg "red" "Could not find the BaseOS comps.xml file in the extracted ISO. Cannot proceed."
     exit 1
 fi
+print_msg "blue" "Found comps file at: $COMPS_FILE"
 cp "$COMPS_FILE" "${CUSTOM_REPO_DIR}/comps.xml"
 
 # --- FIX: Use the group metadata file when creating the repository ---
 print_msg "blue" "Creating custom repository metadata..."
 createrepo_c -g "${CUSTOM_REPO_DIR}/comps.xml" "${CUSTOM_REPO_DIR}"
 
-# 4. Create and Inject the HYBRID Kickstart File
-# (The Kickstart file content is perfect and remains unchanged)
+# 4. Create and Inject the Kickstart File (Content is correct)
 print_msg "blue" "Generating and injecting the Kickstart file..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
 # Kickstart file for ArttulOS (Hybrid Install)
 graphical
+repo --name="BaseOS" --baseurl=file:///run/install/repo/BaseOS
+repo --name="AppStream" --baseurl=file:///run/install/repo/AppStream
 repo --name="custom-kernel" --baseurl=file:///run/install/repo/custom_repo
 lang en_US.UTF-8
 keyboard --vckeymap=us --xlayouts='us'
