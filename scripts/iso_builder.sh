@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v2.2 - Corrected Output Path)
+# ArttulOS ISO Build Script (FINAL v2.3 - Fixes Metadata Error)
 #
 # Description:
-# Creates a custom ArttulOS installer with NO internet access. It uses 'xorriso'
-# with the correct syslinux MBR. THIS VERSION FIXES THE FILE OUTPUT PATH.
+# Correctly generates repository group metadata (-comps.xml) to fix the
+# "Insufficient metadata on installation media" error.
 # ==============================================================================
 
 set -e
@@ -17,8 +17,7 @@ BUILD_DIR="arttulos-build"
 ISO_EXTRACT_DIR="${BUILD_DIR}/iso_extracted"
 CUSTOM_REPO_DIR="${ISO_EXTRACT_DIR}/custom_repo"
 FINAL_ISO_NAME="ArttulOS-9-Hybrid-Installer-Final.iso"
-
-# --- FIX: Define the full, correct output path from the start ---
+ISO_LABEL="ARTTULOS9"
 FINAL_ISO_PATH="${PWD}/${FINAL_ISO_NAME}"
 
 # --- Functions ---
@@ -94,10 +93,22 @@ chmod -R u+w "${ISO_EXTRACT_DIR}"
 # 3. Create the Custom Offline Repository
 print_msg "blue" "Copying pre-downloaded kernel RPMs into the ISO structure..."
 cp "${PREP_KERNEL_DIR}"/*.rpm "${CUSTOM_REPO_DIR}/"
+
+# --- FIX: Copy the group metadata file from the official repo ---
+print_msg "blue" "Copying group metadata (comps.xml) to custom repo..."
+COMPS_FILE=$(find "${ISO_EXTRACT_DIR}/" -path '*/repodata/*-comps.xml' | head -n 1)
+if [ -z "$COMPS_FILE" ]; then
+    print_msg "red" "Could not find a comps.xml file in the extracted ISO. Cannot proceed."
+    exit 1
+fi
+cp "$COMPS_FILE" "${CUSTOM_REPO_DIR}/comps.xml"
+
+# --- FIX: Use the group metadata file when creating the repository ---
 print_msg "blue" "Creating custom repository metadata..."
-createrepo_c "${CUSTOM_REPO_DIR}"
+createrepo_c -g "${CUSTOM_REPO_DIR}/comps.xml" "${CUSTOM_REPO_DIR}"
 
 # 4. Create and Inject the HYBRID Kickstart File
+# (The Kickstart file content is perfect and remains unchanged)
 print_msg "blue" "Generating and injecting the Kickstart file..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
 # Kickstart file for ArttulOS (Hybrid Install)
@@ -213,10 +224,7 @@ xorriso -as mkisofs \
   -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin \
   .
 cd ..
-
-# --- FIX: Change ownership on the correctly pathed file ---
 chown "$(logname)":"$(logname)" "${FINAL_ISO_PATH}"
 
 print_msg "green" "Build complete!"
-# --- FIX: Echo the correct path variable ---
 echo -e "Your new ISO is located at: \e[1m${FINAL_ISO_PATH}\e[0m"
