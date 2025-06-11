@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v2.4 - Correctly Locates comps.xml)
+# ArttulOS ISO Build Script (FINAL v2.5 - Defines ALL Repos in Kickstart)
 #
 # Description:
-# This version fixes the critical "Could not find a comps.xml" error by using a
-# precise path to locate the group metadata file within the extracted ISO.
+# This version fixes the metadata error by correctly defining all required
+# repositories (BaseOS, AppStream, and custom) within the Kickstart file.
 # ==============================================================================
 
 set -e
@@ -55,14 +55,13 @@ for cmd in "${REQUIRED_CMDS[@]}"; do
 done
 
 if [ "$MISSING_CMD" = true ]; then
-    print_msg "yellow" "One or more build tools are missing. Attempting to install from local cache..."
+    print_msg "yellow" "Build tools are missing. Attempting to install from local cache..."
     if [ ! -d "${PREP_TOOLS_DIR}" ] || [ -z "$(ls -A "${PREP_TOOLS_DIR}"/*.rpm 2>/dev/null)" ]; then
         print_msg "red" "The '${PREP_TOOLS_DIR}' directory is missing or empty."
         exit 1
     fi
-    print_msg "blue" "Installing tools from '${PREP_TOOLS_DIR}'..."
     dnf install -y ./${PREP_TOOLS_DIR}/*.rpm
-    print_msg "green" "Build tools installed successfully."
+    print_msg "green" "Build tools installed."
 fi
 
 if [ ! -d "${PREP_KERNEL_DIR}" ] || [ -z "$(ls -A "${PREP_KERNEL_DIR}"/*.rpm 2>/dev/null)" ]; then
@@ -77,50 +76,36 @@ rm -rf "${BUILD_DIR}"
 print_msg "blue" "Creating build workspace..."
 mkdir -p "${BUILD_DIR}/iso_mount" "${ISO_EXTRACT_DIR}" "${CUSTOM_REPO_DIR}"
 
-# 2. Get and Extract the Base ISO
+# 2. Extract Base ISO
 read -p "Please enter the full path to the official Rocky Linux 9 DVD ISO file: " BASE_ISO_PATH
 if [ ! -f "$BASE_ISO_PATH" ]; then
     print_msg "red" "ISO file not found at '${BASE_ISO_PATH}'."
     exit 1
 fi
-
 print_msg "blue" "Mounting and extracting the base ISO..."
 mount -o loop,ro "$BASE_ISO_PATH" "${BUILD_DIR}/iso_mount"
 rsync -a -H --exclude=TRANS.TBL "${BUILD_DIR}/iso_mount/" "${ISO_EXTRACT_DIR}"
 umount "${BUILD_DIR}/iso_mount"
 chmod -R u+w "${ISO_EXTRACT_DIR}"
 
-# 3. Create the Custom Offline Repository
-print_msg "blue" "Copying pre-downloaded kernel RPMs into the ISO structure..."
+# 3. Create Custom Repository
+print_msg "blue" "Copying kernel RPMs and creating simple custom repo..."
 cp "${PREP_KERNEL_DIR}"/*.rpm "${CUSTOM_REPO_DIR}/"
+# NO -g flag needed. Just a simple index of our packages.
+createrepo_c "${CUSTOM_REPO_DIR}"
 
-# --- FIX: Precisely locate and copy the group metadata file ---
-print_msg "blue" "Locating and copying group metadata (comps.xml)..."
-# The comps file is in the BaseOS repository. The glob handles the hash in the filename.
-COMPS_FILE_GLOB="${ISO_EXTRACT_DIR}/BaseOS/repodata/*-comps.xml"
-# Use an array to safely capture the glob expansion
-comps_files=($COMPS_FILE_GLOB)
-COMPS_FILE="${comps_files[0]}"
-
-if [ ! -f "$COMPS_FILE" ]; then
-    print_msg "red" "Could not find the BaseOS comps.xml file in the extracted ISO. Cannot proceed."
-    exit 1
-fi
-print_msg "blue" "Found comps file at: $COMPS_FILE"
-cp "$COMPS_FILE" "${CUSTOM_REPO_DIR}/comps.xml"
-
-# --- FIX: Use the group metadata file when creating the repository ---
-print_msg "blue" "Creating custom repository metadata..."
-createrepo_c -g "${CUSTOM_REPO_DIR}/comps.xml" "${CUSTOM_REPO_DIR}"
-
-# 4. Create and Inject the Kickstart File (Content is correct)
+# 4. Create and Inject the CORRECT Kickstart File
 print_msg "blue" "Generating and injecting the Kickstart file..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
 # Kickstart file for ArttulOS (Hybrid Install)
 graphical
+
+# --- FIX: Define ALL repositories the installer needs ---
 repo --name="BaseOS" --baseurl=file:///run/install/repo/BaseOS
 repo --name="AppStream" --baseurl=file:///run/install/repo/AppStream
 repo --name="custom-kernel" --baseurl=file:///run/install/repo/custom_repo
+
+# Standard Kickstart commands
 lang en_US.UTF-8
 keyboard --vckeymap=us --xlayouts='us'
 timezone America/Los_Angeles --isUtc
@@ -134,6 +119,7 @@ clearpart --all --initlabel
 autopart --type=lvm
 bootloader --location=mbr
 reboot
+
 %packages --instLangs=en_US --excludedocs
 @core
 @server
@@ -143,6 +129,7 @@ policycoreutils-python-utils
 vim-enhanced
 kexec-tools
 %end
+
 %post --log=/root/ks-post.log
 echo "Starting ArttulOS post-installation script..."
 cat << 'SCRIPT_EOF' > /usr/local/sbin/arttulos-first-boot-setup.sh
@@ -197,7 +184,7 @@ echo "Post-installation script finished."
 %end
 EOF
 
-# 5. Modify Bootloader Configs to ADD Kickstart Option
+# 5. Modify Bootloader Configs
 print_msg "blue" "Adding Kickstart option to bootloader configurations..."
 ISOLINUX_CFG="${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
 cat << EOF >> "${ISOLINUX_CFG}"
@@ -216,7 +203,7 @@ menuentry 'Install ArttulOS (Automated Kickstart)' --class red --class gnu-linux
 }
 EOF
 
-# 6. Rebuild the Bootable ISO using the CORRECT xorriso command and path
+# 6. Rebuild the ISO with xorriso
 print_msg "blue" "Building the final ISO using xorriso..."
 cd "${ISO_EXTRACT_DIR}"
 xorriso -as mkisofs \
