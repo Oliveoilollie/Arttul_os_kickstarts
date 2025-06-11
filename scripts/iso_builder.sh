@@ -1,10 +1,10 @@
 #!/bin/bash
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v4.0 - Interactive User Creation)
+# ArttulOS ISO Build Script (FINAL v4.2 - Fully Automated Zero-Touch)
 #
 # Description:
-# - Automates all installation steps (disk, timezone, etc.) via Kickstart.
-# - The installer only stops to prompt the user for their username and password.
+# - Creates a fully automated, non-interactive (zero-touch) installer.
+# - The installer runs in dark mode and requires no user input.
 # - Implements full OS identity, GRUB, and Plymouth branding.
 # ==============================================================================
 
@@ -92,13 +92,12 @@ createrepo_c "${CUSTOM_REPO_DIR}"
 # 4. Create and Inject the Branded Kickstart File
 print_msg "blue" "Generating Kickstart file with full branding..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
-# Kickstart file for ArttulOS (Semi-Automated: Interactive User Creation)
+# Kickstart file for ArttulOS (Fully Automated Zero-Touch Installation)
 graphical
-# --- This command skips the EULA/hub screen ---
+# --- Commands for FULL automation ---
 eula --agreed
-
-# --- By OMITTING the 'user' and 'rootpw' commands, Anaconda is forced to stop
-# and prompt the user for this information. All other sections are automated.
+rootpw --plaintext arttulos
+user --name=arttulos --groups=wheel --password=arttulos --plaintext
 
 # --- Standard configuration ---
 repo --name="BaseOS" --baseurl=file:///run/install/repo/BaseOS
@@ -137,9 +136,7 @@ curl    # Needed for downloading Nix installer
 %post --log=/root/ks-post.log
 echo "Starting ArttulOS post-installation script..."
 
-# The user is created interactively by Anaconda.
-# If they check "Make this user administrator", they are added to the 'wheel' group.
-# This line gives passwordless sudo privileges to that group.
+# The user was created by the 'user' command. This gives passwordless sudo to the 'wheel' group.
 echo "Configuring passwordless sudo for the 'wheel' group..."
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
 
@@ -297,7 +294,8 @@ EOF
 print_msg "blue" "Overwriting bootloader configs for fully automatic installation..."
 ISOLINUX_CFG="${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
 GRUB_CFG="${ISO_EXTRACT_DIR}/EFI/BOOT/grub.cfg"
-KS_APPEND="inst.stage2=hd:LABEL=${ISO_LABEL} quiet inst.ks=hd:LABEL=${ISO_LABEL}:/ks.cfg"
+# Boot parameters for a fully automated, dark-mode installation
+KS_APPEND="inst.stage2=hd:LABEL=${ISO_LABEL} quiet inst.ks=hd:LABEL=${ISO_LABEL}:/ks.cfg inst.gtk.theme=Adwaita-dark"
 
 cat << EOF > "${ISOLINUX_CFG}"
 default vesamenu.c32
