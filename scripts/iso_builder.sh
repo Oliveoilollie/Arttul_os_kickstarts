@@ -1,12 +1,12 @@
 #!/bin/bash
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v3.7 - Full OS Identity Branding)
+# ArttulOS ISO Build Script (FINAL v3.8 - Hide Software Selection)
 #
 # Description:
-# - Removes all user-facing "Rocky Linux" branding from within GNOME by
-#   creating a custom /etc/os-release file and removing rocky-logos.
+# - Removes all user-facing "Rocky Linux" branding from within GNOME.
 # - Implements a custom GRUB theme and Plymouth boot splash.
 # - Creates a fully automated installer for a fully branded GNOME Desktop.
+# - Hides the "Software Selection" screen in the Anaconda installer.
 # ==============================================================================
 
 set -e
@@ -95,6 +95,8 @@ print_msg "blue" "Generating Kickstart file with full branding..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
 # Kickstart file for ArttulOS (GNOME Desktop Edition with Full Branding)
 graphical
+# --- THIS LINE HIDES THE SOFTWARE SELECTION SCREEN ---
+autostep --skip=packages
 repo --name="BaseOS" --baseurl=file:///run/install/repo/BaseOS
 repo --name="AppStream" --baseurl=file:///run/install/repo/AppStream
 repo --name="custom-kernel" --baseurl=file:///run/install/repo/custom_repo
