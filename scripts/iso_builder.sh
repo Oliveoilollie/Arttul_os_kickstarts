@@ -1,12 +1,12 @@
 #!/bin/bash
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v4.3 - Fixed Package Selection)
+# ArttulOS ISO Build Script (FINAL v4.4 - Definitive Package Fix)
 #
 # Description:
 # - Creates a fully automated, non-interactive (zero-touch) installer.
-# - Fixes the "Error Checking Software Selection" by excluding the default
-#   kernel to prevent conflicts with the custom kernel.
-# - Installer runs in dark mode and requires no user input.
+# - Fixes package selection errors by building the desktop environment from
+#   fundamental groups (@core, @gnome-desktop) instead of the high-level
+#   @workstation group, which resolves kernel dependency conflicts.
 # ==============================================================================
 
 set -e
@@ -118,14 +118,21 @@ bootloader --location=mbr
 reboot
 
 %packages --instLangs=en_US --excludedocs
-@workstation-product-environment
-
 # --- THIS IS THE FIX ---
-# Exclude the default kernel packages from the @workstation group to prevent
-# conflicts with the custom kernel-ml package we are installing.
+# Instead of the high-level @workstation group, we build the desktop
+# from its core components to avoid mandatory package conflicts.
+
+# Install the base system, fonts, and the GNOME Desktop environment
+@core
+@fonts
+@gnome-desktop
+@guest-desktop-agents # For better performance in VMs
+
+# Exclude the default kernel packages from the @core group to prevent conflicts
 -kernel
 -kernel-core
 -kernel-modules
+-kernel-modules-core
 
 # Install our custom mainline kernel from the custom repo
 kernel-ml
