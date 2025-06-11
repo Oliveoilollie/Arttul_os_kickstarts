@@ -1,13 +1,11 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL - Corrected xorriso version)
-#
-# Version: 2.1
+# ArttulOS ISO Build Script (FINAL v2.2 - Corrected Output Path)
 #
 # Description:
 # Creates a custom ArttulOS installer with NO internet access. It uses 'xorriso'
-# with the correct syslinux MBR for a fully compatible x86_64 hybrid ISO.
+# with the correct syslinux MBR. THIS VERSION FIXES THE FILE OUTPUT PATH.
 # ==============================================================================
 
 set -e
@@ -19,7 +17,9 @@ BUILD_DIR="arttulos-build"
 ISO_EXTRACT_DIR="${BUILD_DIR}/iso_extracted"
 CUSTOM_REPO_DIR="${ISO_EXTRACT_DIR}/custom_repo"
 FINAL_ISO_NAME="ArttulOS-9-Hybrid-Installer-Final.iso"
-ISO_LABEL="ARTTULOS9"
+
+# --- FIX: Define the full, correct output path from the start ---
+FINAL_ISO_PATH="${PWD}/${FINAL_ISO_NAME}"
 
 # --- Functions ---
 print_msg() {
@@ -41,16 +41,12 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# --- NEW: Self-installing correct dependencies ---
 REQUIRED_CMDS=(xorriso createrepo_c)
 if [ ! -f /usr/share/syslinux/isohdpfx.bin ]; then
-    # Check for the file directly, as the command name can vary.
-    REQUIRED_CMDS+=(syslinux) # A placeholder to trigger install
+    REQUIRED_CMDS+=(syslinux)
 fi
-
 MISSING_CMD=false
 for cmd in "${REQUIRED_CMDS[@]}"; do
-    # For 'syslinux', we check the file again. For others, the command.
     if [ "$cmd" == "syslinux" ]; then
         [ ! -f /usr/share/syslinux/isohdpfx.bin ] && MISSING_CMD=true
     elif ! command -v "$cmd" &> /dev/null; then
@@ -63,7 +59,6 @@ if [ "$MISSING_CMD" = true ]; then
     print_msg "yellow" "One or more build tools are missing. Attempting to install from local cache..."
     if [ ! -d "${PREP_TOOLS_DIR}" ] || [ -z "$(ls -A "${PREP_TOOLS_DIR}"/*.rpm 2>/dev/null)" ]; then
         print_msg "red" "The '${PREP_TOOLS_DIR}' directory is missing or empty."
-        echo "Please run the 'download-all-dependencies.sh' script on an online machine and copy the folder here."
         exit 1
     fi
     print_msg "blue" "Installing tools from '${PREP_TOOLS_DIR}'..."
@@ -96,14 +91,13 @@ rsync -a -H --exclude=TRANS.TBL "${BUILD_DIR}/iso_mount/" "${ISO_EXTRACT_DIR}"
 umount "${BUILD_DIR}/iso_mount"
 chmod -R u+w "${ISO_EXTRACT_DIR}"
 
-# 3. Create the Custom Offline Repository from Local RPMs
+# 3. Create the Custom Offline Repository
 print_msg "blue" "Copying pre-downloaded kernel RPMs into the ISO structure..."
 cp "${PREP_KERNEL_DIR}"/*.rpm "${CUSTOM_REPO_DIR}/"
 print_msg "blue" "Creating custom repository metadata..."
 createrepo_c "${CUSTOM_REPO_DIR}"
 
 # 4. Create and Inject the HYBRID Kickstart File
-# (The Kickstart file content is perfect and remains unchanged)
 print_msg "blue" "Generating and injecting the Kickstart file..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
 # Kickstart file for ArttulOS (Hybrid Install)
@@ -204,12 +198,12 @@ menuentry 'Install ArttulOS (Automated Kickstart)' --class red --class gnu-linux
 }
 EOF
 
-# 6. Rebuild the Bootable ISO using the CORRECT xorriso command
+# 6. Rebuild the Bootable ISO using the CORRECT xorriso command and path
 print_msg "blue" "Building the final ISO using xorriso..."
 cd "${ISO_EXTRACT_DIR}"
 xorriso -as mkisofs \
   -V "${ISO_LABEL}" \
-  -o "/${FINAL_ISO_NAME}" \
+  -o "${FINAL_ISO_PATH}" \
   -b isolinux/isolinux.bin \
   -c isolinux/boot.cat \
   -no-emul-boot -boot-load-size 4 -boot-info-table \
@@ -219,7 +213,10 @@ xorriso -as mkisofs \
   -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin \
   .
 cd ..
-chown "$(logname)":"$(logname)" "/${FINAL_ISO_NAME}"
+
+# --- FIX: Change ownership on the correctly pathed file ---
+chown "$(logname)":"$(logname)" "${FINAL_ISO_PATH}"
 
 print_msg "green" "Build complete!"
-echo -e "Your new ISO is located at: \e[1m${PWD}/${FINAL_ISO_NAME}\e[0m"
+# --- FIX: Echo the correct path variable ---
+echo -e "Your new ISO is located at: \e[1m${FINAL_ISO_PATH}\e[0m"
