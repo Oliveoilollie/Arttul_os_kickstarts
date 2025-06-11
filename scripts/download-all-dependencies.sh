@@ -3,16 +3,12 @@
 # ==============================================================================
 # ArttulOS - Ultimate Dependency Downloader (ONLINE)
 #
-# Version: 2.0
+# Version: 3.0 - Now uses xorriso for a more reliable build.
 #
 # Description:
-# This script MUST be run on a Linux machine WITH an internet connection.
-# It downloads EVERYTHING needed for the offline build process:
+# Downloads EVERYTHING needed for the offline build process:
 #   1. The ELRepo mainline kernel packages into './local-rpms/'.
-#   2. The ISO build tools (genisoimage, isomd5sum, etc.) into './build-tools-rpms/'.
-#
-# Once you have these folders, copy the entire project directory to your
-# offline build machine.
+#   2. The modern ISO build tools, createrepo_c and xorriso, into './build-tools-rpms/'.
 # ==============================================================================
 
 set -e
@@ -52,10 +48,11 @@ dnf download --enablerepo=elrepo-kernel --resolve --arch=x86_64 \
 --downloaddir="${KERNEL_RPM_DIR}" \
 kernel-ml kernel-ml-devel
 
-print_msg "blue" "Downloading ISO build tools into '${TOOLS_RPM_DIR}'..."
+print_msg "blue" "Downloading build tools into '${TOOLS_RPM_DIR}'..."
+# xorriso is the modern tool to build the ISO. createrepo_c is for the package repo.
 dnf download --resolve --arch=x86_64 \
 --downloaddir="${TOOLS_RPM_DIR}" \
-createrepo_c genisoimage syslinux isomd5sum
+xorriso createrepo_c
 
 print_msg "green" "All downloads complete!"
 echo "The folders '${KERNEL_RPM_DIR}' and '${TOOLS_RPM_DIR}' now contain all necessary packages."

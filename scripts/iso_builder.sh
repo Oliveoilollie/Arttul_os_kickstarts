@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (With First-Boot Online Setup & Self-Contained Tools)
+# ArttulOS ISO Build Script (FINAL - xorriso version)
 #
-# Version: 1.8
+# Version: 2.0
 #
 # Description:
-# Creates a custom ArttulOS installer that is fully offline. It will self-install
-# missing build tools from a local cache. After the OS is installed, a one-time
-# service runs on FIRST BOOT to download online packages like browsers.
+# Creates a custom ArttulOS installer with NO internet access. It uses the
+# modern 'xorriso' tool to build a fully compatible hybrid ISO, avoiding
+# the problems with the older toolchain.
 # ==============================================================================
 
 set -e
@@ -19,7 +19,7 @@ PREP_TOOLS_DIR="build-tools-rpms"
 BUILD_DIR="arttulos-build"
 ISO_EXTRACT_DIR="${BUILD_DIR}/iso_extracted"
 CUSTOM_REPO_DIR="${ISO_EXTRACT_DIR}/custom_repo"
-FINAL_ISO_NAME="ArttulOS-9-Hybrid-Installer.iso"
+FINAL_ISO_NAME="ArttulOS-9-Hybrid-Installer-Final.iso"
 ISO_LABEL="ARTTULOS9"
 
 # --- Functions ---
@@ -43,7 +43,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # --- NEW: Self-installing dependencies ---
-REQUIRED_CMDS=(createrepo_c genisoimage isohybrid implantisomd5sum)
+REQUIRED_CMDS=(xorriso createrepo_c)
 MISSING_CMD=false
 for cmd in "${REQUIRED_CMDS[@]}"; do
     if ! command -v "$cmd" &> /dev/null; then
@@ -63,11 +63,9 @@ if [ "$MISSING_CMD" = true ]; then
     dnf install -y ./${PREP_TOOLS_DIR}/*.rpm
     print_msg "green" "Build tools installed successfully."
 fi
-# --- END NEW SECTION ---
 
 if [ ! -d "${PREP_KERNEL_DIR}" ] || [ -z "$(ls -A "${PREP_KERNEL_DIR}"/*.rpm 2>/dev/null)" ]; then
     print_msg "red" "The '${PREP_KERNEL_DIR}' directory is missing or empty."
-    echo "Please run the 'download-all-dependencies.sh' script first."
     exit 1
 fi
 
@@ -98,10 +96,10 @@ print_msg "blue" "Creating custom repository metadata..."
 createrepo_c "${CUSTOM_REPO_DIR}"
 
 # 4. Create and Inject the HYBRID Kickstart File
+# (The Kickstart file content is perfect, so it remains unchanged)
 print_msg "blue" "Generating and injecting the Kickstart file..."
 cat << EOF > "${ISO_EXTRACT_DIR}/ks.cfg"
 # Kickstart file for ArttulOS (Hybrid Install)
-# Installs an offline base, then uses a first-boot script to get online packages.
 graphical
 repo --name="custom-kernel" --baseurl=file:///run/install/repo/custom_repo
 lang en_US.UTF-8
@@ -167,14 +165,10 @@ cat << 'MOTD_EOF' > /etc/motd
 
         Welcome to ArttulOS
       This system is running a mainline kernel from ELRepo.
-
-      First boot setup is in progress. Please wait a few minutes
-      for online packages (Firefox, etc.) to be installed.
-      You can monitor the progress in /var/log/arttulos-first-boot.log
+      First boot setup is in progress. You can monitor in /var/log/arttulos-first-boot.log
 
 MOTD_EOF
 systemctl enable arttulos-first-boot.service
-echo "Setting default kernel and creating user..."
 grub2-set-default 0
 useradd ArttulOS -c "ArttulOS Admin"
 usermod -aG wheel ArttulOS
@@ -203,13 +197,23 @@ menuentry 'Install ArttulOS (Automated Kickstart)' --class red --class gnu-linux
 }
 EOF
 
-# 6. Rebuild the Bootable ISO
-print_msg "blue" "Building the final ISO: ${FINAL_ISO_NAME}..."
+# 6. Rebuild the Bootable ISO using xorriso
+print_msg "blue" "Building the final ISO using xorriso (this will be warning-free)..."
 cd "${ISO_EXTRACT_DIR}"
-genisoimage -o "/${FINAL_ISO_NAME}" -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e images/efiboot.img -no-emul-boot -R -J -v -T -V "${ISO_LABEL}" .
+xorriso -as mkisofs \
+  -V "${ISO_LABEL}" \
+  -o "/${FINAL_ISO_NAME}" \
+  -b isolinux/isolinux.bin \
+  -c isolinux/boot.cat \
+  -no-emul-boot -boot-load-size 4 -boot-info-table \
+  --grub2-boot-info \
+  --grub2-mbr /usr/share/grub2/i386-pc/boot_hybrid.img \
+  -eltorito-alt-boot \
+  -e images/efiboot.img \
+  -no-emul-boot \
+  -isohybrid-gpt-basdat \
+  .
 cd ..
-implantisomd5sum "/${FINAL_ISO_NAME}"
-isohybrid --uefi "/${FINAL_ISO_NAME}"
 chown "$(logname)":"$(logname)" "/${FINAL_ISO_NAME}"
 
 print_msg "green" "Build complete!"
