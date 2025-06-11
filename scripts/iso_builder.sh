@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v3.1 - Full Branding Edition)
+# ArttulOS ISO Build Script (FINAL v3.2 - Corrected Credentials)
 #
 # Description:
+# - Sets the username and password correctly to 'arttulos' for both.
 # - Implements full ArttulOS branding: Plymouth boot splash, login screen,
 #   and desktop wallpaper using the provided 'scripts/strix.png' file.
-# - Creates a fully automated installer for a GNOME Desktop environment.
 # ==============================================================================
 
 set -e
@@ -43,10 +43,8 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# --- Check for branding assets ---
 if [ ! -f "${BRANDING_DIR}/${WALLPAPER_FILE}" ]; then
     print_msg "red" "Branding file not found at '${BRANDING_DIR}/${WALLPAPER_FILE}'."
-    echo "Please create the 'scripts' directory and place '${WALLPAPER_FILE}' inside it."
     exit 1
 fi
 
@@ -128,14 +126,14 @@ plymouth-scripts
 %post --log=/root/ks-post.log
 echo "Starting ArttulOS post-installation script..."
 
-useradd ArttulOS -c "ArttulOS Admin"
-usermod -aG wheel ArttulOS
-echo "ArttulOS:arttulos" | chpasswd
+# --- FIX: Create the 'arttulos' user with the correct password ---
+echo "Creating user 'arttulos'..."
+useradd arttulos -c "ArttulOS User"
+usermod -aG wheel arttulos
+echo "arttulos:arttulos" | chpasswd
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
 
 # --- 1. COPY BRANDING ASSETS ---
-# The branding folder was injected into the ISO by the build script.
-# We copy it from the installer environment to the final system.
 echo "Copying branding assets..."
 INSTALLER_BRANDING_DIR="/run/install/repo/branding"
 SYSTEM_WALLPAPER_DIR="/usr/share/backgrounds/arttulos"
@@ -148,7 +146,6 @@ PLYMOUTH_THEME_DIR="/usr/share/plymouth/themes/arttulos"
 mkdir -p \$PLYMOUTH_THEME_DIR
 cp "\${SYSTEM_WALLPAPER_DIR}/strix.png" "\${PLYMOUTH_THEME_DIR}/"
 
-# Create the .plymouth metadata file
 cat << PLYMOUTH_EOF > \${PLYMOUTH_THEME_DIR}/arttulos.plymouth
 [Plymouth Theme]
 Name=ArttulOS
@@ -160,7 +157,6 @@ ImageDir=\${PLYMOUTH_THEME_DIR}
 ScriptFile=\${PLYMOUTH_THEME_DIR}/arttulos.script
 PLYMOUTH_EOF
 
-# Create the .script file to display the image
 cat << SCRIPT_EOF > \${PLYMOUTH_THEME_DIR}/arttulos.script
 wallpaper_image = Image("strix.png");
 screen_width = Window.GetWidth();
@@ -171,13 +167,10 @@ wallpaper_sprite.SetZ(-100);
 SCRIPT_EOF
 
 echo "Setting new Plymouth theme and rebuilding initramfs..."
-# Set the new theme as default and rebuild the initramfs with it.
-# This replaces the need for a separate dracut command.
 plymouth-set-default-theme arttulos -R
 
 # --- 3. SET GNOME DESKTOP AND LOGIN WALLPAPER ---
 echo "Configuring GDM login and user desktop backgrounds..."
-# This creates system-wide settings that apply to the login screen and all new users.
 GSETTINGS_OVERRIDES_DIR="/etc/dconf/db/local.d"
 GDM_OVERRIDES_DIR="/etc/dconf/db/gdm.d"
 WALLPAPER_PATH="/usr/share/backgrounds/arttulos/strix.png"
@@ -185,7 +178,6 @@ WALLPAPER_PATH="/usr/share/backgrounds/arttulos/strix.png"
 mkdir -p \$GSETTINGS_OVERRIDES_DIR
 mkdir -p \$GDM_OVERRIDES_DIR
 
-# Create override for default user wallpaper and lock screen
 cat << GSETTINGS_EOF > \${GSETTINGS_OVERRIDES_DIR}/01-arttulos-branding
 [org/gnome/desktop/background]
 picture-uri='file://\${WALLPAPER_PATH}'
@@ -195,14 +187,12 @@ picture-uri-dark='file://\${WALLPAPER_PATH}'
 picture-uri='file://\${WALLPAPER_PATH}'
 GSETTINGS_EOF
 
-# Create override for the GDM login screen
 cat << GDM_EOF > \${GDM_OVERRIDES_DIR}/01-arttulos-branding
 [org/gnome/desktop/background]
 picture-uri='file://\${WALLPAPER_PATH}'
 picture-uri-dark='file://\${WALLPAPER_PATH}'
 GDM_EOF
 
-# Compile the settings databases
 dconf update
 
 # Set the ELRepo kernel as default
