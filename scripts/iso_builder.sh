@@ -1,12 +1,13 @@
 #!/bin/bash
 
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v3.6 - Full Branding with GRUB Theme)
+# ArttulOS ISO Build Script (FINAL v3.7 - Full OS Identity Branding)
 #
 # Description:
-# - Implements a custom GRUB bootloader theme with strix.png background and
-#   purple/blue menu colors.
-# - Implements full ArttulOS branding across the entire OS.
+# - Removes all user-facing "Rocky Linux" branding from within GNOME by
+#   creating a custom /etc/os-release file and removing rocky-logos.
+# - Implements a custom GRUB theme and Plymouth boot splash.
+# - Creates a fully automated installer for a fully branded GNOME Desktop.
 # ==============================================================================
 
 set -e
@@ -120,6 +121,11 @@ policycoreutils-python-utils
 vim-enhanced
 kexec-tools
 plymouth-scripts
+
+# --- FIX: Explicitly remove Rocky Linux logo packages ---
+-rocky-logos
+-rocky-logos-httpd
+-rocky-logos-epel
 %end
 
 %post --log=/root/ks-post.log
@@ -130,6 +136,26 @@ useradd arttulos -c "ArttulOS User"
 usermod -aG wheel arttulos
 echo "arttulos:arttulos" | chpasswd
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
+
+# --- 6. OS IDENTITY BRANDING ---
+# This is the most important step to remove "Rocky Linux" from the OS itself.
+echo "Creating custom /etc/os-release file..."
+cat << OS_RELEASE_EOF > /etc/os-release
+NAME="ArttulOS"
+VERSION="9"
+ID="arttulos"
+ID_LIKE="fedora rhel"
+VERSION_ID="9"
+PLATFORM_ID="platform:el9"
+PRETTY_NAME="ArttulOS 9"
+ANSI_COLOR="0;35"
+CPE_NAME="cpe:/o:arttulos:arttulos:9"
+HOME_URL="https://arttulos.com/"
+BUG_REPORT_URL="https://bugs.arttulos.com/"
+OS_RELEASE_EOF
+
+echo "Creating legacy /etc/redhat-release file..."
+echo "ArttulOS release 9" > /etc/redhat-release
 
 echo "Copying branding assets..."
 INSTALLER_BRANDING_DIR="/run/install/repo/branding"
@@ -162,49 +188,23 @@ SCRIPT_EOF
 echo "Setting new Plymouth theme and rebuilding initramfs..."
 plymouth-set-default-theme arttulos -R
 
-# --- 5. CREATE AND SET GRUB THEME ---
 echo "Creating GRUB theme..."
 GRUB_THEME_DIR="/boot/grub2/themes/arttulos"
 mkdir -p \$GRUB_THEME_DIR
 cp "\${SYSTEM_WALLPAPER_DIR}/strix.png" "\${GRUB_THEME_DIR}/background.png"
 
 cat << THEME_EOF > \${GRUB_THEME_DIR}/theme.txt
-# ArttulOS GRUB Theme
 desktop-image: "background.png"
 desktop-color: "#000000"
 title-text: ""
-+ boot_menu {
-    left = 15%
-    width = 70%
-    top = 35%
-    height = 40%
-    item_font = "DejaVu Sans 16"
-    item_color = "#87cefa"                  # Light Blue for normal text
-    item_spacing = 25
-    selected_item_font = "DejaVu Sans Bold 16"
-    selected_item_color = "#d8b6ff"                 # Light Purple for selected text
-}
-+ hbox {
-    left = 15%
-    top = 80%
-    width = 70%
-    + label {
-        text = "ArttulOS 9 - Mainline Kernel"
-        font = "DejaVu Sans 12"
-        color = "#cccccc"
-    }
-}
++ boot_menu { left = 15%; width = 70%; top = 35%; height = 40%; item_font = "DejaVu Sans 16"; item_color = "#87cefa"; item_spacing = 25; selected_item_font = "DejaVu Sans Bold 16"; selected_item_color = "#d8b6ff"; }
++ hbox { left = 15%; top = 80%; width = 70%; + label { text = "ArttulOS 9 - Mainline Kernel"; font = "DejaVu Sans 12"; color = "#cccccc"; } }
 THEME_EOF
 
 echo "Applying GRUB theme..."
-# Set the theme and ensure a graphical terminal is enabled
 echo 'GRUB_THEME="/boot/grub2/themes/arttulos/theme.txt"' >> /etc/default/grub
 echo 'GRUB_TERMINAL_OUTPUT="gfxterm"' >> /etc/default/grub
-
-# Set the ELRepo kernel as default *before* rebuilding the config
 grub2-set-default 0
-
-# Rebuild the GRUB config to apply all changes
 grub2-mkconfig -o /boot/grub2/grub.cfg
 
 echo "Configuring GDM login and user desktop backgrounds..."
