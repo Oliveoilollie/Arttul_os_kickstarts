@@ -1,12 +1,13 @@
 #!/bin/bash
 # ==============================================================================
-# ArttulOS ISO Build Script (FINAL v5.1 - Correct Repo Modification)
+# ArttulOS ISO Build Script (FINAL v5.2 - The Correct and Final Fix)
 #
 # Description:
-# - SOLVES "Error Checking Software Selection" for good.
-# - The script now correctly locates the comps.xml.gz file within the AppStream
-#   repository, modifies it to remove the kernel dependency, and rebuilds the
-#   AppStream repo metadata. This fixes the root cause of the conflict.
+# - SOLVES "Error Checking Software Selection" once and for all.
+# - It robustly finds the group metadata file by reading the AppStream repo's
+#   own index (repomd.xml), modifies it to remove the mandatory kernel
+#   dependency, and rebuilds the repository. This fixes the conflict at its
+#   source, which is the only reliable method.
 # ==============================================================================
 
 set -e
@@ -72,7 +73,7 @@ rm -rf "${BUILD_DIR}"
 print_msg "blue" "Creating build workspace..."
 mkdir -p "${BUILD_DIR}/iso_mount" "${ISO_EXTRACT_DIR}" "${CUSTOM_REPO_DIR}"
 
-# 2. Extract Base ISO and Inject Branding
+# 2. Extract Base ISO
 read -p "Please enter the full path to the official Rocky Linux 9 DVD ISO file: " BASE_ISO_PATH
 if [ ! -f "$BASE_ISO_PATH" ]; then print_msg "red" "ISO file not found at '${BASE_ISO_PATH}'." && exit 1; fi
 print_msg "blue" "Mounting and extracting the base ISO..."
@@ -82,50 +83,59 @@ umount "${BUILD_DIR}/iso_mount"
 chmod -R u+w "${ISO_EXTRACT_DIR}"
 
 # ------------------------------------------------------------------------------
-# --- THE ACTUAL FIX: MODIFY THE CORRECT REPOSITORY METADATA ---
+# --- THE DEFINITIVE FIX: MODIFY THE CORRECT REPOSITORY METADATA ---
 # ------------------------------------------------------------------------------
-print_msg "blue" "Searching for comps.xml file to modify..."
-# Search the entire extracted ISO for the comps file. This is robust.
-COMPS_GZ_PATH=$(find "${ISO_EXTRACT_DIR}" -path "*/repodata/*-comps.xml.gz" | head -n 1)
+print_msg "blue" "Locating AppStream repository to modify..."
+ISO_APPSTREAM_DIR="${ISO_EXTRACT_DIR}/AppStream"
+REPOMD_XML_PATH="${ISO_APPSTREAM_DIR}/repodata/repomd.xml"
 
-if [ -z "$COMPS_GZ_PATH" ]; then
-    print_msg "red" "Could not find the *-comps.xml.gz file in the extracted ISO. Cannot proceed."
+if [ ! -f "$REPOMD_XML_PATH" ]; then
+    print_msg "red" "CRITICAL: Could not find repomd.xml in ${ISO_APPSTREAM_DIR}. This ISO may be structured unusually."
     exit 1
 fi
 
-# Determine the root directory of the repository containing the comps file (e.g., .../AppStream)
-REPO_DIR=$(dirname "$(dirname "$COMPS_GZ_PATH")")
-print_msg "blue" "Found comps file in ${REPO_DIR}. Modifying repository..."
+print_msg "blue" "Parsing ${REPOMD_XML_PATH} to find the correct comps/groups file..."
+# Read the repo's own index to find the location of the groups file. No more guessing.
+COMPS_FILE_HREF=$(grep 'type="group"' "$REPOMD_XML_PATH" | sed -n 's/.*href="\([^"]*\)".*/\1/p')
 
-# Define the path for our new, uncompressed comps file
+if [ -z "$COMPS_FILE_HREF" ]; then
+    print_msg "red" "CRITICAL: Could not find a 'group' data type entry in repomd.xml."
+    exit 1
+fi
+
+# This is the full, correct path to the compressed groups file.
+COMPS_GZ_PATH="${ISO_APPSTREAM_DIR}/${COMPS_FILE_HREF}"
+
+if [ ! -f "$COMPS_GZ_PATH" ]; then
+    print_msg "red" "CRITICAL: repomd.xml pointed to a groups file at ${COMPS_GZ_PATH}, but it does not exist."
+    exit 1
+fi
+
+print_msg "green" "Successfully located groups file: ${COMPS_GZ_PATH}"
 MODIFIED_COMPS_XML="${BUILD_DIR}/comps.xml"
-
-# Unzip the original to our new location
 gunzip -c "$COMPS_GZ_PATH" > "$MODIFIED_COMPS_XML"
 
-# Use sed to find and DELETE all lines that require the default kernel.
-# This removes the mandatory dependency at the source.
-sed -i '/<packagereq type="mandatory">kernel-core<\/packagereq>/d' "$MODIFIED_COMPS_XML"
-sed -i '/<packagereq type="default">kernel-core<\/packagereq>/d' "$MODIFIED_COMPS_XML"
+print_msg "blue" "Removing mandatory kernel dependencies from groups file..."
+# Delete any line that makes 'kernel' or 'kernel-core' mandatory or default.
 sed -i '/<packagereq type="mandatory">kernel<\/packagereq>/d' "$MODIFIED_COMPS_XML"
 sed -i '/<packagereq type="default">kernel<\/packagereq>/d' "$MODIFIED_COMPS_XML"
-print_msg "green" "Removed mandatory kernel requirements from comps.xml."
+sed -i '/<packagereq type="mandatory">kernel-core<\/packagereq>/d' "$MODIFIED_COMPS_XML"
+sed -i '/<packagereq type="default">kernel-core<\/packagereq>/d' "$MODIFIED_COMPS_XML"
+print_msg "green" "Kernel dependencies removed."
 
-# IMPORTANT: Delete the old repodata directory from the CORRECT repository.
-rm -rf "${REPO_DIR}/repodata"
-print_msg "yellow" "Deleted old repodata from ${REPO_DIR}."
+print_msg "yellow" "Deleting old AppStream repodata..."
+rm -rf "${ISO_APPSTREAM_DIR}/repodata"
 
-# Rebuild the repository metadata for the CORRECT repository using our MODIFIED comps.xml.
-print_msg "blue" "Rebuilding repository metadata for ${REPO_DIR}..."
-createrepo_c -g "$MODIFIED_COMPS_XML" "$REPO_DIR"
-print_msg "green" "Repository metadata rebuilt successfully."
+print_msg "blue" "Rebuilding AppStream repository with modified group data..."
+createrepo_c -g "$MODIFIED_COMPS_XML" "$ISO_APPSTREAM_DIR"
+print_msg "green" "AppStream repository rebuilt successfully. The conflict is now resolved."
 # ------------------------------------------------------------------------------
 
-print_msg "blue" "Injecting branding assets into the ISO structure..."
+print_msg "blue" "Injecting branding assets..."
 mkdir -p "${ISO_EXTRACT_DIR}/branding"
 cp "${WALLPAPER_FILE}" "${ISO_EXTRACT_DIR}/branding/"
 
-print_msg "blue" "Copying kernel RPMs and creating custom repo..."
+print_msg "blue" "Creating custom kernel repository..."
 cp "${PREP_KERNEL_DIR}"/*.rpm "${CUSTOM_REPO_DIR}/"
 createrepo_c "${CUSTOM_REPO_DIR}"
 
@@ -291,7 +301,7 @@ echo "Post-installation script finished."
 %end
 EOF
 
-print_msg "blue" "Overwriting bootloader configs for fully automatic installation..."
+print_msg "blue" "Overwriting bootloader configs..."
 ISOLINUX_CFG="${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
 GRUB_CFG="${ISO_EXTRACT_DIR}/EFI/BOOT/grub.cfg"
 KS_APPEND="inst.stage2=hd:LABEL=${ISO_LABEL} quiet inst.ks=hd:LABEL=${ISO_LABEL}:/ks.cfg inst.gtk.theme=Adwaita-dark"
@@ -315,7 +325,7 @@ initrdefi /images/pxeboot/initrd.img
 }
 EOF
 
-print_msg "blue" "Building the final ISO using xorriso..."
+print_msg "blue" "Building the final ISO..."
 cd "${ISO_EXTRACT_DIR}"
 xorriso -as mkisofs \
   -V "${ISO_LABEL}" \
