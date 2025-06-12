@@ -1,13 +1,17 @@
 #!/bin/bash
 # ==============================================================================
-# Diagnostic Script: Inspect .treeinfo
+# Diagnostic Script: Inspect .treeinfo (File Output Version)
 #
 # Description:
-# This script safely mounts a given ISO file and prints the exact content
-# of the .treeinfo file to the console for analysis.
+# This script safely mounts a given ISO file and saves the exact content
+# of the .treeinfo file to 'treeinfo_output.txt' for analysis.
 # ==============================================================================
 
 set -e
+
+# --- Configuration ---
+readonly DIAG_DIR="treeinfo_diagnostics"
+readonly OUTPUT_FILE="treeinfo_output.txt"
 
 # --- Helper Functions ---
 print_msg() {
@@ -30,8 +34,6 @@ cleanup() {
 
 # --- Main Execution ---
 main() {
-    readonly DIAG_DIR="treeinfo_diagnostics"
-
     trap cleanup EXIT SIGHUP SIGINT SIGTERM
 
     print_msg "blue" "Verifying prerequisites..."
@@ -61,11 +63,22 @@ main() {
         exit 1
     fi
 
-    echo -e "\n\n==================== Contents of .treeinfo ====================\n"
-    cat "${treeinfo_path}"
-    echo -e "\n================== End of .treeinfo Contents ==================\n"
-    print_msg "blue" "Diagnostics complete. Please copy the text between the '====' lines and provide it for analysis."
+    # Redirect all output from this block to the output file
+    (
+        echo "==================== Contents of .treeinfo from ${base_iso_path} ===================="
+        echo "Generated on: $(date)"
+        echo "======================================================================================="
+        echo ""
+        cat "${treeinfo_path}"
+    ) > "${OUTPUT_FILE}"
 
+    # Return ownership of the created file to the user who ran sudo
+    if [ -n "$SUDO_USER" ]; then
+        chown "${SUDO_USER}:${SUDO_GROUP:-$SUDO_USER}" "${OUTPUT_FILE}"
+    fi
+
+    print_msg "blue" "Diagnostics complete. A file named '${OUTPUT_FILE}' has been created in this directory."
+    print_msg "blue" "Please provide the contents of this file for analysis."
 }
 
 # Run the main function
