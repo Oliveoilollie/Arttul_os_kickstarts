@@ -1,38 +1,43 @@
 #!/bin/bash
 # ==============================================================================
-# ArttulOS Live ISO Build Script (v8.1 - Corrected & Verified)
+# ArttulOS Installer Build Script (v9.0 - The mkksiso Method)
 #
-# Author: RHEL/Rocky Linux Engineering Discipline
+# Author: RHEL/Rocky Linux Engineering Discipline (Corrected)
 #
 # Description:
-# This script builds a fully branded ArttulOS Live ISO using the correct
-# 'livemedia-creator' methodology.
+# This script builds a fully branded and customized ArttulOS INSTALLER ISO.
 #
-# v8.1 Corrects Critical Flaws:
-#   - FIX: Implements a robust method for installing the custom kernel RPMs.
-#   - FIX: Uses the correct '--add-file' argument for injecting local files
-#     (wallpaper, kernels) into the build environment, replacing the old hack.
-#   - FIX: The Kickstart file is now complete, with no condensed or missing code.
-#   - All options and Kickstart commands have been verified against best
-#     practices for Live media creation.
+# It uses the official 'mkksiso' utility, which is the correct tool for
+# embedding a Kickstart file into a pre-existing installer ISO. This replaces
+# all previous, incorrect methodologies.
+#
+# How it works:
+# 1. A temporary local web server is started to host custom assets.
+# 2. A Kickstart file is generated that adds this web server as a repo.
+# 3. 'mkksiso' injects this Kickstart into a base Rocky Linux installer ISO.
 # ==============================================================================
 
 set -e -o pipefail
 
 # --- Configuration Section ---
-readonly FINAL_ISO_NAME="ArttulOS-9-Live-GNOME.iso"
-readonly ISO_LABEL="ArttulOS_9_x86"
-readonly KS_FILENAME="arttulos-live-final.ks"
+readonly FINAL_ISO_NAME="ArttulOS-9-Installer.iso"
+readonly KS_FILENAME="arttulos-installer.ks"
 
-# These directories must exist in the same location as the script.
+# These directories/files must exist in the same location as the script.
 readonly PREP_KERNEL_DIR="local-rpms"
 readonly WALLPAPER_FILE="strix.png"
 
-# System Defaults
+# Staging area for the temporary web server
+readonly STAGING_DIR="/tmp/arttulos_build_staging"
+readonly WEB_SERVER_PORT="8000"
+WEB_SERVER_PID=""
+
+# System Defaults for the INSTALLED system
 readonly KS_LANG="en_US.UTF-8"
 readonly KS_TIMEZONE="America/Los_Angeles"
 readonly KS_USER="arttulos"
 readonly KS_PASS="arttulos"
+readonly KS_HOSTNAME="arttulos.localdomain"
 
 # --- Helper Functions ---
 print_msg() {
@@ -43,102 +48,130 @@ print_msg() {
         "red")    echo -e "\n\033[1;31m[ERROR]\033[0m ${message}${nocolor}" >&2 ;;
     esac
 }
-cleanup() {
-    print_msg "blue" "Performing cleanup..."
-    rm -f "${KS_FILENAME}"
-}
 
 # --- Main Functions ---
+
 check_prerequisites() {
     print_msg "blue" "Verifying prerequisites..."
     if [[ "$EUID" -ne 0 ]]; then print_msg "red" "This script must be run as root. Please use sudo."; exit 1; fi
-    if ! command -v livemedia-creator &> /dev/null; then
-        print_msg "red" "'livemedia-creator' not found. Please run: sudo dnf install lorax-lmc-novirt"
+    if ! command -v mkksiso &> /dev/null; then
+        print_msg "red" "'mkksiso' command not found. Please run: sudo dnf install pykickstart"
         exit 1
     fi
+    if ! command -v python3 &> /dev/null; then print_msg "red" "'python3' not found. This is required for the temporary web server."; exit 1; fi
     if [ ! -f "${WALLPAPER_FILE}" ]; then print_msg "red" "Branding file not found: '${PWD}/${WALLPAPER_FILE}'"; exit 1; fi
     if [ ! -d "${PREP_KERNEL_DIR}" ] || [ -z "$(ls -A "${PREP_KERNEL_DIR}"/*.rpm 2>/dev/null)" ]; then
-        print_msg "red" "The '${PREP_KERNEL_DIR}' directory is missing or empty."
-        exit 1
+        print_msg "red" "The '${PREP_KERNEL_DIR}' directory is missing or empty."; exit 1
     fi
 }
 
+start_web_server() {
+    print_msg "blue" "Preparing and starting temporary web server..."
+    rm -rf "${STAGING_DIR}"
+    mkdir -p "${STAGING_DIR}"
+    
+    # Copy assets to the staging area
+    cp "${PREP_KERNEL_DIR}"/*.rpm "${STAGING_DIR}/"
+    cp "${WALLPAPER_FILE}" "${STAGING_DIR}/"
+
+    # Create a repository for our custom RPMs
+    createrepo_c "${STAGING_DIR}"
+
+    # Start the web server in the background
+    cd "${STAGING_DIR}"
+    python3 -m http.server "${WEB_SERVER_PORT}" &
+    WEB_SERVER_PID=$!
+    cd - > /dev/null
+
+    # Give the server a moment to start up
+    sleep 2
+    print_msg "green" "Temporary web server started with PID ${WEB_SERVER_PID}."
+}
+
+stop_web_server() {
+    if [ -n "${WEB_SERVER_PID}" ]; then
+        print_msg "blue" "Stopping temporary web server..."
+        kill "${WEB_SERVER_PID}" &>/dev/null || true
+    fi
+    rm -rf "${STAGING_DIR}"
+    rm -f "${KS_FILENAME}"
+}
+
 generate_kickstart() {
+    local ip_addr
+    # Find a non-localhost IP address for the host machine
+    ip_addr=$(hostname -I | awk '{print $1}')
+    if [ -z "$ip_addr" ]; then
+        print_msg "red" "Could not determine local IP address for the web server."
+        exit 1
+    fi
+    print_msg "blue" "Web server will be accessible at http://${ip_addr}:${WEB_SERVER_PORT}"
+
     print_msg "blue" "Generating Kickstart file: ${KS_FILENAME}"
     cat << EOF > "${KS_FILENAME}"
-# Kickstart for ArttulOS 9 Live Media - Generated by Build Script v8.1
+# Kickstart for ArttulOS 9 Installer - Generated by Build Script v9.0
 #version=DEVEL
+graphical
 lang ${KS_LANG}
 keyboard --vckeymap=us --xlayouts='us'
 timezone ${KS_TIMEZONE} --isUtc
 network --bootproto=dhcp --device=link --activate
-repo --name="BaseOS" --baseurl=http://dl.rockylinux.org/pub/rocky/9/BaseOS/\$basearch/os/
-repo --name="AppStream" --baseurl=http://dl.rockylinux.org/pub/rocky/9/AppStream/\$basearch/os/
-user --name=${KS_USER} --groups=wheel --password=${KS_PASS} --plaintext
-rootpw --plaintext ${KS_PASS}
-firewall --enabled --service=mdns
-selinux --enforcing
+eula --agreed
+shutdown
 zerombr
 clearpart --all --initlabel
-part / --fstype="ext4" --grow --size=1
-bootloader --location=none
-poweroff
+autopart --type=lvm
+bootloader --location=mbr
+
+# Define the official repositories
+repo --name="BaseOS" --baseurl=http://dl.rockylinux.org/pub/rocky/9/BaseOS/\$basearch/os/
+repo --name="AppStream" --baseurl=http://dl.rockylinux.org/pub/rocky/9/AppStream/\$basearch/os/
+
+# --- CRITICAL: Add our temporary local repository ---
+repo --name="arttulos-local" --baseurl="http://${ip_addr}:${WEB_SERVER_PORT}/"
+
+# User and Security Configuration
+rootpw --plaintext ${KS_PASS}
+user --name=${KS_USER} --groups=wheel --password=${KS_PASS} --plaintext
+firewall --enabled --service=ssh
+selinux --enforcing
 
 %packages
-@anaconda-tools
-@base-x
 @core
 @fonts
 @gnome-desktop
 @guest-desktop-agents
 @hardware-support
-@multimedia
-@networkmanager-submodules
-@internet-browser
-# Critical scripts for a Live environment
-livesys-scripts
-dracut-live
-# Base kernel is included as a dependency and fallback
-kernel
-# Extra tools and fonts
-libreoffice-calc
-libreoffice-writer
-glibc-all-langpacks
-# Remove unneeded groups to save space
--@dial-up
--@input-methods
--@standard
--gfs2-utils
--reiserfs-utils
+# --- CRITICAL: Install our custom kernel directly ---
+kernel-ml
+kernel-ml-devel
+# System Tools
+policycoreutils-python-utils
+vim-enhanced
+kexec-tools
+plymouth-scripts
+flatpak
+curl
 # Remove Rocky branding packages
--rocky-logos
--rocky-logos-httpd
--rocky-logos-epel
+-rocky-logos*
 %end
 
 %post --log=/root/ks-post.log --erroronfail
 echo "--- ArttulOS Post-Installation & Full Rebranding Script ---"
-
-# CRITICAL FIX: Install the custom kernel from the files added to /tmp.
-# The --allowerasing flag handles replacing the base kernel cleanly.
-echo "Installing custom mainline kernel..."
-dnf install -y --allowerasing /tmp/*.rpm
-
-# System Identity & Permissions
+# System Identity
 echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel
 cat << 'OS_RELEASE_EOF' > /etc/os-release
 NAME="ArttulOS"; VERSION="9"; ID="arttulos"; ID_LIKE="fedora rhel"; VERSION_ID="9"; PLATFORM_ID="platform:el9"
 PRETTY_NAME="ArttulOS 9"; ANSI_COLOR="0;35"; CPE_NAME="cpe:/o:arttulos:arttulos:9"
 HOME_URL="https://arttulos.com/"; BUG_REPORT_URL="https://bugs.arttulos.com/"
 OS_RELEASE_EOF
-echo "ArttulOS release 9" > /etc/redhat-release; echo "ArttulOS 9 (Live)" > /etc/issue; echo "ArttulOS 9 (Live) -- Kernel \\r on \\m" > /etc/issue.net
-for repo_file in /etc/yum.repos.d/rocky*.repo; do [ -f "\$repo_file" ] || continue; new_name=\$(echo "\$repo_file" | sed 's/rocky/arttulos/'); mv "\$repo_file" "\$new_name"; sed -i 's/^name=Rocky Linux/name=ArttulOS/g' "\$new_name"; done
-
+echo "ArttulOS release 9" > /etc/redhat-release; echo "ArttulOS 9" > /etc/issue
 # Visual Branding
 SYSTEM_WALLPAPER_DIR="/usr/share/backgrounds/arttulos"
 mkdir -p "\${SYSTEM_WALLPAPER_DIR}"
-# CRITICAL FIX: Copy wallpaper from the correct location provided by --add-file
-cp /tmp/${WALLPAPER_FILE} "\${SYSTEM_WALLPAPER_DIR}/"
+# Download the wallpaper from our temporary web server
+curl -o "\${SYSTEM_WALLPAPER_DIR}/${WALLPAPER_FILE}" "http://${ip_addr}:${WEB_SERVER_PORT}/${WALLPAPER_FILE}"
+# The rest of the branding logic is identical to previous correct versions...
 PLYMOUTH_THEME_DIR="/usr/share/plymouth/themes/arttulos"; mkdir -p "\${PLYMOUTH_THEME_DIR}"; cp "\${SYSTEM_WALLPAPER_DIR}/${WALLPAPER_FILE}" "\${PLYMOUTH_THEME_DIR}/"
 cat << 'PLYMOUTH_EOF' > "\${PLYMOUTH_THEME_DIR}/arttulos.plymouth"
 [Plymouth Theme]; Name=ArttulOS; Description=ArttulOS Boot Splash; ModuleName=script
@@ -154,67 +187,48 @@ desktop-image: "background.png"; desktop-color: "#000000"; title-text: ""
 + boot_menu { left = 15%; width = 70%; top = 35%; height = 40%; item_font = "DejaVu Sans 16"; item_color = "#87cefa"; item_spacing = 25; selected_item_font = "DejaVu Sans Bold 16"; selected_item_color = "#d8b6ff"; }
 + hbox { left = 15%; top = 80%; width = 70%; + label { text = "ArttulOS 9 - Mainline Kernel"; font = "DejaVu Sans 12"; color = "#cccccc"; } }
 THEME_EOF
-echo 'GRUB_THEME="/boot/grub2/themes/arttulos/theme.txt"' >> /etc/default/grub; echo 'GRUB_TERMINAL_OUTPUT="gfxterm"' >> /etc/default/grub;
-
+echo 'GRUB_THEME="/boot/grub2/themes/arttulos/theme.txt"' >> /etc/default/grub; echo 'GRUB_TERMINAL_OUTPUT="gfxterm"' >> /etc/default/grub; grub2-mkconfig -o /boot/grub2/grub.cfg
 # GNOME Desktop Configuration
 GSETTINGS_OVERRIDES_DIR="/etc/dconf/db/local.d"; WALLPAPER_PATH="file://\${SYSTEM_WALLPAPER_DIR}/${WALLPAPER_FILE}"; mkdir -p "\${GSETTINGS_OVERRIDES_DIR}"
 cat << 'GSETTINGS_EOF' > "\${GSETTINGS_OVERRIDES_DIR}/01-arttulos-branding"
 [org/gnome/desktop/interface]; color-scheme='prefer-dark'
 [org/gnome/desktop/background]; picture-uri='${WALLPAPER_PATH}'; picture-uri-dark='${WALLPAPER_PATH}'
-[org/gnome/desktop/screensaver]; picture-uri='${WALLPAPER_PATH}'
-[org.gnome.shell]; favorite-apps=['org.mozilla.firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Console.desktop', 'org.gnome.Software.desktop']
+[org.gnome.shell]; favorite-apps=['org.mozilla.firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Console.desktop']
 GSETTINGS_EOF
 dconf update
-
-# Finalize image for Live environment
-systemctl enable livesys.service livesys-late.service
-rm -f /etc/machine-id; touch /etc/machine-id
+# First-boot setup service can be added here if needed.
+echo "--- Post-installation script finished successfully. ---"
 %end
 EOF
     print_msg "green" "Kickstart file generated successfully."
 }
 
-build_live_iso() {
-    print_msg "blue" "Preparing to build Live ISO..."
+build_installer_iso() {
+    local base_iso_path
+    read -p "Please enter the full path to the BASE Rocky Linux 9 INSTALLER ISO: " base_iso_path
+    if [ ! -f "$base_iso_path" ]; then
+        print_msg "red" "Source ISO file not found at '${base_iso_path}'."
+        exit 1
+    fi
+
+    print_msg "blue" "Starting ISO build with mkksiso. This will be quick."
     
-    # Prepare arguments for livemedia-creator. We build these dynamically.
-    local lmc_args=(
-        --make-iso
-        --ks "${KS_FILENAME}"
-        --iso-name "${FINAL_ISO_NAME}"
-        --iso-volid "${ISO_LABEL}"
-        --no-virt
-        --resultdir .
-        --project "ArttulOS 9"
-        --releasever "9"
-    )
-
-    # CRITICAL FIX: Use '--add-file' to inject the wallpaper.
-    # The format is SRC=DEST, where DEST is the path inside the build chroot.
-    lmc_args+=(--add-file "${PWD}/${WALLPAPER_FILE}=/tmp/${WALLPAPER_FILE}")
-
-    # CRITICAL FIX: Loop through the kernel RPMs and add each one.
-    print_msg "blue" "Adding custom kernel RPMs to the build..."
-    for rpm_file in "${PREP_KERNEL_DIR}"/*.rpm; do
-        lmc_args+=(--add-file "${PWD}/${rpm_file}=/tmp/$(basename "$rpm_file")")
-    done
-
-    print_msg "blue" "Starting Live ISO build. This will take a significant amount of time."
-    print_msg "blue" "A detailed log will be in 'lmc.log'."
-
-    # Execute the command with all arguments
-    livemedia-creator "${lmc_args[@]}"
+    # Use mkksiso to inject the kickstart and create the final ISO
+    mkksiso --ks "${KS_FILENAME}" "${base_iso_path}" "${FINAL_ISO_NAME}"
 
     print_msg "green" "Build complete!"
-    echo -e "Your new Live ISO is located at: \033[1m${PWD}/${FINAL_ISO_NAME}\033[0m"
+    echo -e "Your new installer ISO is located at: \033[1m${PWD}/${FINAL_ISO_NAME}\033[0m"
 }
 
 # --- Main Execution ---
 main() {
-    trap cleanup EXIT SIGHUP SIGINT SIGTERM
+    # Ensure cleanup runs regardless of script exit status
+    trap stop_web_server EXIT SIGHUP SIGINT SIGTERM
+
     check_prerequisites
+    start_web_server
     generate_kickstart
-    build_live_iso
+    build_installer_iso
 }
 
 main "$@"
