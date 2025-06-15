@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ==============================================================================
-#  ArttulOS Automated ISO Builder v9.2 (Robust Asset Checks)
+#  ArttulOS Automated ISO Builder v9.3-debug
 #
-#  - Adds explicit checks to verify assets exist after git clone, preventing
-#    confusing 'convert' errors and providing clearer failure messages.
-#  - Includes sed fix and progress indicators from previous versions.
+#  - ADDS INTENSE LOGGING around the image conversion step to diagnose a
+#    persistent 'convert' error. We will now treat the environment or
+#    script logic as the primary suspect, not the asset files.
 #
 #  Written by: Natalie Spiva, ArttulOS Project
 # ==============================================================================
@@ -43,8 +43,9 @@ BUILD_MODE="Interactive"; TOTAL_STEPS=8
 
 generate_kickstart() {
     print_step "Generating Kickstart file for '${BUILD_MODE}' mode..."
+    # Kickstart generation logic is unchanged
     KS_LANG="en_US.UTF-8"; KS_TIMEZONE="America/New_York"; KS_HOSTNAME="arttulos-desktop"
-    cat << EOF > "$BUILD_DIR/$KS_FILENAME"
+    cat > "$BUILD_DIR/$KS_FILENAME" <<EOF
 graphical
 lang ${KS_LANG}
 keyboard --vckeymap=us --xlayouts='us'
@@ -65,29 +66,25 @@ gnome-initial-setup
 %end
 EOF
     if [ "$BUILD_MODE" == "Appliance" ] || [ "$BUILD_MODE" == "OEM" ]; then
-        cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
-eula --agreed
-reboot
-EOF
+        echo "eula --agreed" >> "$BUILD_DIR/$KS_FILENAME"
+        echo "reboot" >> "$BUILD_DIR/$KS_FILENAME"
     fi
     if [ "$BUILD_MODE" == "Appliance" ]; then
-        cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
-user --name=arttulos --groups=wheel --password=arttulos --plaintext
-EOF
+        echo "user --name=arttulos --groups=wheel --password=arttulos --plaintext" >> "$BUILD_DIR/$KS_FILENAME"
     fi
-    cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
+    cat >> "$BUILD_DIR/$KS_FILENAME" <<EOF
 %post --log=/root/ks-post.log --erroronfail
 echo "--- Starting ArttulOS Post-Installation Script (${BUILD_MODE} mode) ---"
 echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel
 sed -i 's/^#?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 EOF
     if [ "$BUILD_MODE" == "Appliance" ]; then
-        cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
+        cat >> "$BUILD_DIR/$KS_FILENAME" <<EOF
 chage -d 0 arttulos
 echo "Welcome to ArttulOS Appliance. Default user/pass: arttulos/arttulos. You must change the password on first login." > /etc/motd
 EOF
     elif [ "$BUILD_MODE" == "OEM" ]; then
-        cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
+        cat >> "$BUILD_DIR/$KS_FILENAME" <<'EOF'
 cat << SERVICE_EOF > /etc/systemd/system/oem-setup.service
 [Unit]
 Description=ArttulOS First Boot Setup Wizard
@@ -112,17 +109,13 @@ EOF
 main() {
     # Initialize State
     CURRENT_STEP=0
-    if [[ "$1" == "--appliance" ]]; then
-        BUILD_MODE="Appliance"
-    elif [[ "$1" == "--oem" ]]; then
-        BUILD_MODE="OEM"
-    fi
+    if [[ "$1" == "--appliance" ]]; then BUILD_MODE="Appliance"; elif [[ "$1" == "--oem" ]]; then BUILD_MODE="OEM"; fi
     FINAL_ISO_NAME="${DISTRO_NAME}-${DISTRO_VERSION}-${BUILD_MODE}-Installer.iso"
 
     # Banner
     echo -e "${BLUE}======================================================================${NC}"
-    echo -e "${BLUE}  ArttulOS Automated ISO Builder v9.2                                 ${NC}"
-    echo -e "${BLUE}  Building in: ${YELLOW}${BUILD_MODE} Mode${NC} (Default is Interactive)"
+    echo -e "${BLUE}  ArttulOS Automated ISO Builder v9.3-debug                           ${NC}"
+    echo -e "${BLUE}  Building in: ${YELLOW}${BUILD_MODE} Mode${NC}"
     echo -e "${BLUE}======================================================================${NC}"
 
     # Build Process
@@ -131,13 +124,8 @@ main() {
     
     print_step "Checking for base ISO and downloading if needed..."
     if [ ! -f "$ISO_FILENAME" ]; then
-        echo -e "${YELLOW}    Base ISO '${ISO_FILENAME}' not found.${NC}"
-        read -p "    Do you want to download it now? (~9GB) [y/N]: " -n 1 -r REPLY; echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            wget -c "$ISO_URL" || error_exit "Download failed."
-        else
-            error_exit "User aborted."
-        fi
+        read -p "    Base ISO '${ISO_FILENAME}' not found. Download now? (~9GB) [y/N]: " -n 1 -r REPLY; echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then wget -c "$ISO_URL" || error_exit "Download failed."; else error_exit "User aborted."; fi
     else
         echo -e "${GREEN}    Found local base ISO.${NC}"
     fi
@@ -147,19 +135,37 @@ main() {
     echo -e "${GREEN}    Assets cloned.${NC}"
 
     print_step "Processing and resizing branding images..."
-    # <<< FIX IS HERE >>> Add checks to ensure the source files exist BEFORE trying to convert them.
+    
+    # +++ START OF NEW DEBUG BLOCK +++
+    echo -e "${YELLOW}--- DEBUG: Verifying paths and permissions before conversion ---${NC}"
     local sidebar_src_path="$BUILD_DIR/$ASSET_DIR/$SOURCE_SIDEBAR_IMAGE"
+    local sidebar_dest_path="$BUILD_DIR/arttulos-sidebar.png"
     local topbar_src_path="$BUILD_DIR/$ASSET_DIR/$SOURCE_TOPBAR_IMAGE"
+    local topbar_dest_path="$BUILD_DIR/arttulos-topbar.png"
 
-    if [ ! -f "$sidebar_src_path" ]; then
-        error_exit "Source sidebar image not found at expected path: $sidebar_src_path"
-    fi
-    if [ ! -f "$topbar_src_path" ]; then
-        error_exit "Source topbar image not found at expected path: $topbar_src_path"
-    fi
+    echo "Current working directory: $(pwd)"
+    echo "Build directory ($BUILD_DIR) contents:"
+    ls -l "$BUILD_DIR"
+    echo "Asset directory ($BUILD_DIR/$ASSET_DIR) contents:"
+    ls -l "$BUILD_DIR/$ASSET_DIR"
 
-    convert "$sidebar_src_path" -resize 180x230\! "$BUILD_DIR/$FINAL_SIDEBAR_PNG" || error_exit "ImageMagick failed to process sidebar image."
-    convert "$topbar_src_path" -resize 150x25\! "$BUILD_DIR/$FINAL_TOPBAR_PNG" || error_exit "ImageMagick failed to process topbar image."
+    echo "Sidebar Source Path Variable:      $sidebar_src_path"
+    echo "Sidebar Destination Path Variable: $sidebar_dest_path"
+    echo "Topbar Source Path Variable:       $topbar_src_path"
+    echo "Topbar Destination Path Variable:  $topbar_dest_path"
+
+    echo "Checking source file with 'file' command:"
+    file "$sidebar_src_path"
+    file "$topbar_src_path"
+    
+    echo "Verifying ImageMagick version:"
+    convert -version
+    
+    echo -e "${YELLOW}--- DEBUG: Attempting conversion now... ---${NC}"
+    # +++ END OF NEW DEBUG BLOCK +++
+    
+    convert "$sidebar_src_path" -resize 180x230\! "$sidebar_dest_path" || error_exit "ImageMagick failed to process sidebar image."
+    convert "$topbar_src_path" -resize 150x25\! "$topbar_dest_path" || error_exit "ImageMagick failed to process topbar image."
     echo -e "${GREEN}    Images resized successfully.${NC}"
     
     generate_kickstart
@@ -173,8 +179,8 @@ main() {
     print_step "Applying visual branding (unpacking installer...)"
     unsquashfs -progress iso_root/images/install.img || error_exit "Failed to unpack install.img."
     
-    cp -f "$FINAL_SIDEBAR_PNG" squashfs-root/usr/share/anaconda/pixmaps/sidebar-logo.png
-    cp -f "$FINAL_TOPBAR_PNG"  squashfs-root/usr/share/anaconda/pixmaps/topbar-logo.png
+    cp -f "$sidebar_dest_path" squashfs-root/usr/share/anaconda/pixmaps/sidebar-logo.png
+    cp -f "$topbar_dest_path"  squashfs-root/usr/share/anaconda/pixmaps/topbar-logo.png
     sed -i "s/NAME=\"Rocky Linux\"/NAME=\"${DISTRO_NAME}\"/" squashfs-root/etc/os-release
     sed -i "s/Rocky Linux release/${DISTRO_NAME} release/" squashfs-root/etc/redhat-release
     echo -e "${GREEN}    Visual branding applied.${NC}"
@@ -193,12 +199,7 @@ main() {
     
     print_step "Rebuilding final ISO image..."
     cd iso_root
-    xorriso -as mkisofs -V "${ISO_LABEL}" -o "../../${FINAL_ISO_NAME}" \
-      -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin \
-      -c isolinux/boot.cat -b isolinux/isolinux.bin -no-emul-boot \
-      -boot-load-size 4 -boot-info-table -eltorito-alt-boot \
-      -e images/efiboot.img -no-emul-boot -isohybrid-gpt-basdat \
-      . > /dev/null 2>&1 || error_exit "Failed to rebuild final ISO."
+    xorriso -as mkisofs -V "${ISO_LABEL}" -o "../../${FINAL_ISO_NAME}" -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin -c isolinux/boot.cat -b isolinux/isolinux.bin -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e images/efiboot.img -no-emul-boot -isohybrid-gpt-basdat . > /dev/null 2>&1 || error_exit "Failed to rebuild final ISO."
     cd ../..; rm -rf "$BUILD_DIR"
     
     # Success
