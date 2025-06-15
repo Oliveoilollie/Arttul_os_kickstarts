@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ==============================================================================
-#  ArttulOS Automated ISO Builder v8.1 (RHEL 9.4+ Compatible)
+#  ArttulOS Automated ISO Builder v9.1 (sed Fix & Progress)
 #
-#  Fixes the build process for modern Rocky/AlmaLinux 9.4+ ISOs by targeting
-#  the new 'install.img' file instead of the legacy 'squashfs.img'.
+#  - Adds progress indicators for long operations.
+#  - Fixes a critical 'sed' command error by using a safe delimiter (@).
 #
 #  Written by: Natalie Spiva, ArttulOS Project
 # ==============================================================================
@@ -12,11 +12,16 @@
 # --- Shell Colors ---
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
-# --- Error Handling ---
+# --- Helper Functions ---
 error_exit() {
     echo -e "\n${RED}BUILD FAILED: $1${NC}" >&2
     [ -d "$BUILD_DIR" ] && rm -rf "$BUILD_DIR"
     exit 1
+}
+
+print_step() {
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    echo -e "\n${YELLOW}--> Step ${CURRENT_STEP}/${TOTAL_STEPS}: $1${NC}"
 }
 
 # --- Configuration ---
@@ -28,23 +33,18 @@ ASSET_REPO_URL="https://github.com/Sprunglesonthehub/arttulos-assets.git"
 SOURCE_SIDEBAR_IMAGE="A.png"
 SOURCE_TOPBAR_IMAGE="fox.png"
 KS_FILENAME="arttulos.ks"
-KS_LANG="en_US.UTF-8"
-KS_TIMEZONE="America/New_York"
-KS_HOSTNAME="arttulos-desktop"
 
 # --- Script Internals ---
 BUILD_DIR="build_temp"; ASSET_DIR="arttulos-assets"
-FINAL_SIDEBAR_PNG="arttulos-sidebar.png"; FINAL_TOPBAR_PNG="arttulos-topbar.png"
-BUILD_MODE="Interactive"
+BUILD_MODE="Interactive"; TOTAL_STEPS=8
 
 # ============================ MAIN SCRIPT LOGIC ============================
 
 generate_kickstart() {
-    echo -e "\n${YELLOW}--> Step 3: Generating Kickstart file for '${BUILD_MODE}' mode...${NC}"
+    print_step "Generating Kickstart file for '${BUILD_MODE}' mode..."
     
-    # Common Kickstart Settings
+    KS_LANG="en_US.UTF-8"; KS_TIMEZONE="America/New_York"; KS_HOSTNAME="arttulos-desktop"
     cat << EOF > "$BUILD_DIR/$KS_FILENAME"
-# Kickstart for ArttulOS - ${BUILD_MODE} Graphical Install
 graphical
 lang ${KS_LANG}
 keyboard --vckeymap=us --xlayouts='us'
@@ -64,8 +64,6 @@ selinux --enforcing
 gnome-initial-setup
 %end
 EOF
-
-    # Mode-Specific Automation Settings
     if [ "$BUILD_MODE" == "Appliance" ] || [ "$BUILD_MODE" == "OEM" ]; then
         cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
 eula --agreed
@@ -77,26 +75,19 @@ EOF
 user --name=arttulos --groups=wheel --password=arttulos --plaintext
 EOF
     fi
-
-    # Post-Install Script
     cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
 %post --log=/root/ks-post.log --erroronfail
 echo "--- Starting ArttulOS Post-Installation Script (${BUILD_MODE} mode) ---"
 echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel
 sed -i 's/^#?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 EOF
-
     if [ "$BUILD_MODE" == "Appliance" ]; then
         cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
-echo "Forcing password expiry for the default user..."
 chage -d 0 arttulos
-cat << MOTD_EOF > /etc/motd
-Welcome to ArttulOS Appliance. Default user/pass: arttulos/arttulos. You must change the password on first login.
-MOTD_EOF
+echo "Welcome to ArttulOS Appliance. Default user/pass: arttulos/arttulos. You must change the password on first login." > /etc/motd
 EOF
     elif [ "$BUILD_MODE" == "OEM" ]; then
         cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
-echo "Creating and enabling the OEM first-boot setup service..."
 cat << SERVICE_EOF > /etc/systemd/system/oem-setup.service
 [Unit]
 Description=ArttulOS First Boot Setup Wizard
@@ -110,23 +101,17 @@ WantedBy=graphical.target
 SERVICE_EOF
 systemctl enable oem-setup.service
 EOF
-    else # Interactive Mode
-        cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
-cat << MOTD_EOF > /etc/motd
-Welcome to your new ArttulOS system.
-MOTD_EOF
-EOF
+    else
+        echo "Welcome to your new ArttulOS system." > /etc/motd
     fi
-
-    cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
-echo "--- Post-installation script finished successfully. ---"
-%end
-EOF
+    echo "--- Post-installation script finished successfully. ---" >> "$BUILD_DIR/$KS_FILENAME"
+    echo "%end" >> "$BUILD_DIR/$KS_FILENAME"
     echo -e "${GREEN}    Kickstart file generated successfully.${NC}"
 }
 
 main() {
-    # Process Command-Line Arguments
+    # Initialize State
+    CURRENT_STEP=0
     if [[ "$1" == "--appliance" ]]; then
         BUILD_MODE="Appliance"
     elif [[ "$1" == "--oem" ]]; then
@@ -136,65 +121,68 @@ main() {
 
     # Banner
     echo -e "${BLUE}======================================================================${NC}"
-    echo -e "${BLUE}  ArttulOS Automated ISO Builder v8.1                                 ${NC}"
+    echo -e "${BLUE}  ArttulOS Automated ISO Builder v9.1                                 ${NC}"
     echo -e "${BLUE}  Building in: ${YELLOW}${BUILD_MODE} Mode${NC} (Default is Interactive)"
     echo -e "${BLUE}======================================================================${NC}"
-
-    # Pre-flight Checks
-    if [ ! -f "$ISO_FILENAME" ]; then
-        echo -e "\n${YELLOW}Base ISO '${ISO_FILENAME}' not found.${NC}"
-        read -p "Do you want to download it now? (~9GB) [y/N]: " -n 1 -r REPLY; echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            wget -c "$ISO_URL" || error_exit "Download failed."
-        else
-            error_exit "User aborted."
-        fi
-    fi
 
     # Build Process
     echo -e "\n${BLUE}Starting the full ArttulOS build process...${NC}"
     rm -rf "$BUILD_DIR"; mkdir -p "$BUILD_DIR" || error_exit "Could not create build directory."
     
-    echo -e "\n${YELLOW}--> Steps 1 & 2: Fetching and processing assets...${NC}"
+    print_step "Checking for base ISO and downloading if needed..."
+    if [ ! -f "$ISO_FILENAME" ]; then
+        echo -e "${YELLOW}    Base ISO '${ISO_FILENAME}' not found.${NC}"
+        read -p "    Do you want to download it now? (~9GB) [y/N]: " -n 1 -r REPLY; echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            wget -c "$ISO_URL" || error_exit "Download failed."
+        else
+            error_exit "User aborted."
+        fi
+    else
+        echo -e "${GREEN}    Found local base ISO.${NC}"
+    fi
+
+    print_step "Cloning branding assets from GitHub..."
     git clone --quiet "$ASSET_REPO_URL" "$BUILD_DIR/$ASSET_DIR" || error_exit "Failed to clone Git repo."
+    echo -e "${GREEN}    Assets cloned.${NC}"
+
+    print_step "Processing and resizing branding images..."
     convert "$BUILD_DIR/$ASSET_DIR/$SOURCE_SIDEBAR_IMAGE" -resize 180x230\! "$BUILD_DIR/$FINAL_SIDEBAR_PNG" || error_exit "Failed to process sidebar image."
     convert "$BUILD_DIR/$ASSET_DIR/$SOURCE_TOPBAR_IMAGE" -resize 150x25\! "$BUILD_DIR/$FINAL_TOPBAR_PNG" || error_exit "Failed to process topbar image."
-    echo -e "${GREEN}    Assets ready.${NC}"
+    echo -e "${GREEN}    Images resized successfully.${NC}"
     
     generate_kickstart
 
-    echo -e "\n${YELLOW}--> Steps 4 & 5: Unpacking ISO and applying visual branding...${NC}"
+    print_step "Extracting base ISO contents..."
     7z x "$ISO_FILENAME" -o"$BUILD_DIR/iso_root" > /dev/null || error_exit "Failed to extract base ISO."
+    echo -e "${GREEN}    ISO extracted.${NC}"
+
     cd "$BUILD_DIR" || error_exit "Could not enter build directory."
-    
-    # <<< FIX IS HERE >>>
-    # Unpack the NEW 'install.img' file instead of the old 'squashfs.img'
-    unsquashfs iso_root/images/install.img > /dev/null || error_exit "Failed to unpack install.img. The base ISO may be corrupt or an unsupported version."
+
+    print_step "Applying visual branding (unpacking installer...)"
+    unsquashfs -progress iso_root/images/install.img || error_exit "Failed to unpack install.img."
     
     cp -f "$FINAL_SIDEBAR_PNG" squashfs-root/usr/share/anaconda/pixmaps/sidebar-logo.png
     cp -f "$FINAL_TOPBAR_PNG"  squashfs-root/usr/share/anaconda/pixmaps/topbar-logo.png
     sed -i "s/NAME=\"Rocky Linux\"/NAME=\"${DISTRO_NAME}\"/" squashfs-root/etc/os-release
     sed -i "s/Rocky Linux release/${DISTRO_NAME} release/" squashfs-root/etc/redhat-release
-    
-    # <<< FIX IS HERE >>>
-    # Remove the OLD 'install.img' file before repacking
-    rm iso_root/images/install.img
-    
-    # <<< FIX IS HERE >>>
-    # Repack the filesystem into a NEW 'install.img' file
-    mksquashfs squashfs-root iso_root/images/install.img -noappend > /dev/null || error_exit "Failed to repack install.img."
-    
     echo -e "${GREEN}    Visual branding applied.${NC}"
 
-    echo -e "\n${YELLOW}--> Step 6: Integrating Kickstart and configuring bootloader...${NC}"
+    print_step "Integrating Kickstart and repacking installer..."
     cp "$KS_FILENAME" iso_root/
+    rm iso_root/images/install.img
+    mksquashfs squashfs-root iso_root/images/install.img -noappend -progress || error_exit "Failed to repack install.img."
+    
     ISO_LABEL=$(isoinfo -d -i ../"$ISO_FILENAME" | grep "Volume id" | awk -F': ' '{print $2}')
     KS_PARAM="inst.ks=hd:LABEL=${ISO_LABEL}:/${KS_FILENAME}"
-    sed -i "/^  linux/ s/$/ ${KS_PARAM}/" iso_root/EFI/BOOT/grub.cfg
-    sed -i "/^  append/ s/$/ ${KS_PARAM}/" iso_root/isolinux/isolinux.cfg
-    echo -e "${GREEN}    Bootloader configured.${NC}"
     
-    echo -e "\n${YELLOW}--> Step 7: Rebuilding final ${BUILD_MODE} ISO...${NC}"
+    # <<< FIX IS HERE >>> Using '@' as the sed delimiter to avoid conflicts.
+    sed -i "/^  linux/ s@\$@ ${KS_PARAM}@" iso_root/EFI/BOOT/grub.cfg
+    sed -i "/^  append/ s@\$@ ${KS_PARAM}@" iso_root/isolinux/isolinux.cfg
+    
+    echo -e "${GREEN}    Bootloader configured for unattended install.${NC}"
+    
+    print_step "Rebuilding final ISO image..."
     cd iso_root
     xorriso -as mkisofs -V "${ISO_LABEL}" -o "../../${FINAL_ISO_NAME}" \
       -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin \
