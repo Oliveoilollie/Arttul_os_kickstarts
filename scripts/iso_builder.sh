@@ -1,12 +1,11 @@
 #!/bin/bash
 
 # ==============================================================================
-#  ArttulOS Automated ISO Builder v13.0 (Surgical Path Fix)
+#  ArttulOS Automated ISO Builder v14.0 (Robust Pathing)
 #
-#  - DEFINITIVE FIX: After generating grub.cfg, this script now performs
-#    a surgical `sed` replacement to correct the kernel and initrd paths.
-#    This resolves the "kernel not found" error when /boot is on a
-#    separate partition from an LVM root.
+#  - FIX: Captures the absolute path of the base ISO at the start.
+#  - This prevents the "Could not get Volume ID" error caused by the
+#    script changing directories during the build process.
 #
 #  Written by: Natalie Spiva, ArttulOS Project
 #  Enhanced by: AI Assistant
@@ -57,7 +56,6 @@ firewall --enabled --service=ssh
 repo --name="elrepo-kernel" --baseurl=https://elrepo.org/linux/kernel/el9/x86_64/ --gpgkey=https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
 zerombr
 clearpart --all --initlabel
-# autopart creates a separate /boot partition, which is key to this problem
 autopart --type=lvm
 bootloader --location=mbr --boot-drive=sda
 rootpw --lock
@@ -76,7 +74,6 @@ EOF
     if [ "$BUILD_MODE" == "Appliance" ]; then
         echo "user --name=arttulos --groups=wheel --password=arttulos --plaintext" >> "$BUILD_DIR/$KS_FILENAME"
     fi
-    # <<< THE REAL FIX IS HERE >>>
     cat >> "$BUILD_DIR/$KS_FILENAME" <<'EOF'
 %post --log=/root/ks-post.log --erroronfail
 echo "--- Starting ArttulOS Post-Installation Script (${BUILD_MODE} mode) ---"
@@ -85,21 +82,14 @@ sed -i 's/^#?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 echo "Importing ELRepo GPG keys into final system..."
 rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
 rpm --import https://www.elrepo.org/RPM-GPG-KEY-v2-elrepo.org
-
-# =====================================================================
-# === KERNEL FIX: Force correct GRUB paths for separate /boot on LVM ===
-# =====================================================================
 echo "Step 1: Finding the newly installed mainline kernel..."
 ML_KERNEL_PATH=$(ls /boot/vmlinuz-*.elrepo.x86_64 | head -n 1)
 if [ -z "$ML_KERNEL_PATH" ]; then
-    echo "FATAL: Could not find the ELRepo kernel in /boot." >&2
-    exit 1
+    echo "FATAL: Could not find the ELRepo kernel in /boot." >&2; exit 1
 fi
 echo "Found kernel-ml: ${ML_KERNEL_PATH}"
-
 echo "Step 2: Setting the new kernel as the default entry..."
 grubby --set-default "${ML_KERNEL_PATH}"
-
 echo "Step 3: Rebuilding the GRUB configuration file..."
 GRUB_CFG_PATH=""
 if [ -f /boot/grub2/grub.cfg ]; then
@@ -111,20 +101,13 @@ elif [ -f /boot/efi/EFI/rocky/grub.cfg ]; then
     grub2-mkconfig -o "${GRUB_CFG_PATH}"
     echo "Rebuilt UEFI GRUB config at ${GRUB_CFG_PATH}"
 else
-    echo "FATAL: Could not find grub.cfg to rebuild." >&2
-    exit 1
+    echo "FATAL: Could not find grub.cfg to rebuild." >&2; exit 1
 fi
-
 echo "Step 4: SURGICAL FIX - Correcting kernel paths in grub.cfg for LVM setup..."
-# grub2-mkconfig in chroot incorrectly adds a /boot prefix. We must remove it.
-# This finds lines starting with 'linux' or 'initrd' followed by ' /boot/'
-# and replaces ' /boot/' with just ' /'. This is the critical fix.
 sed -i "s#\(^\s*\)\(linux\|initrd\) /boot/#\2 /#" "${GRUB_CFG_PATH}"
 echo "Kernel paths in ${GRUB_CFG_PATH} have been corrected."
-
 echo "Post-install kernel configuration complete. The new default kernel is:"
 grubby --default-kernel
-# =====================================================================
 EOF
     if [ "$BUILD_MODE" == "Appliance" ]; then
         cat >> "$BUILD_DIR/$KS_FILENAME" <<EOF
@@ -158,19 +141,27 @@ main() {
     CURRENT_STEP=0
     if [[ "$1" == "--appliance" ]]; then BUILD_MODE="Appliance"; elif [[ "$1" == "--oem" ]]; then BUILD_MODE="OEM"; fi
     FINAL_ISO_NAME="${DISTRO_NAME}-${DISTRO_VERSION}-${BUILD_MODE}-Kernel-ML-Installer.iso"
+    
+    # <<< FIX IS HERE >>> Get the absolute path to the ISO file's expected location.
+    BASE_ISO_PATH="$(pwd)/${ISO_FILENAME}"
+
     echo -e "${BLUE}======================================================================${NC}"
-    echo -e "${BLUE}  ArttulOS Automated ISO Builder v13.0                                ${NC}"
+    echo -e "${BLUE}  ArttulOS Automated ISO Builder v14.0                                ${NC}"
     echo -e "${BLUE}  Building in: ${YELLOW}${BUILD_MODE} Mode${NC} (Default is Interactive)"
     echo -e "${BLUE}======================================================================${NC}"
     echo -e "\n${BLUE}Starting the full ArttulOS build process...${NC}"
     rm -rf "$BUILD_DIR"; mkdir -p "$BUILD_DIR" || error_exit "Could not create build directory."
     print_step "Checking for base ISO and downloading if needed..."
-    if [ ! -f "$ISO_FILENAME" ]; then
-        read -p "    Base ISO '${ISO_FILENAME}' not found. Download now? (~9GB) [y/N]: " -n 1 -r REPLY; echo
+    
+    # Use the absolute path for the check
+    if [ ! -f "$BASE_ISO_PATH" ]; then
+        echo "    Base ISO not found at '${BASE_ISO_PATH}'"
+        read -p "    Download now? (~9GB) [y/N]: " -n 1 -r REPLY; echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then wget -c "$ISO_URL" || error_exit "Download failed."; else error_exit "User aborted."; fi
     else
         echo -e "${GREEN}    Found local base ISO.${NC}"
     fi
+
     print_step "Cloning branding assets from GitHub..."
     git clone --quiet "$ASSET_REPO_URL" "$BUILD_DIR/$ASSET_DIR" || error_exit "Failed to clone Git repo."
     echo -e "${GREEN}    Assets cloned.${NC}"
@@ -184,9 +175,13 @@ main() {
     echo -e "${GREEN}    Images resized successfully.${NC}"
     generate_kickstart
     print_step "Extracting base ISO contents..."
-    7z x "$ISO_FILENAME" -o"$BUILD_DIR/iso_root" > /dev/null || error_exit "Failed to extract base ISO."
+    
+    # Use the absolute path for extraction
+    7z x "$BASE_ISO_PATH" -o"$BUILD_DIR/iso_root" > /dev/null || error_exit "Failed to extract base ISO."
     echo -e "${GREEN}    ISO extracted.${NC}"
+    
     cd "$BUILD_DIR" || error_exit "Could not enter build directory."
+    
     print_step "Applying visual branding (unpacking installer...)"
     unsquashfs "iso_root/images/install.img" || error_exit "Failed to unpack install.img."
     cp -f "arttulos-sidebar.png" "squashfs-root/usr/share/anaconda/pixmaps/sidebar-logo.png"
@@ -202,12 +197,16 @@ main() {
     sed -i "s/Rocky Linux/${DISTRO_NAME}/g" "iso_root/EFI/BOOT/grub.cfg"
     sed -i "s/Rocky Linux/${DISTRO_NAME}/g" "iso_root/isolinux/isolinux.cfg"
     [ -f "iso_root/EFI/BOOT/BOOT.CSV" ] && sed -i "s/Rocky Linux/${DISTRO_NAME}/g" "iso_root/EFI/BOOT/BOOT.CSV"
-    ISO_LABEL=$(xorriso -indev ../"$ISO_FILENAME" -volid_get 2>/dev/null)
-    if [ -z "$ISO_LABEL" ]; then error_exit "Could not get Volume ID from base ISO using xorriso."; fi
+    
+    # <<< FIX IS HERE >>> Use the absolute path to get the Volume ID.
+    ISO_LABEL=$(xorriso -indev "$BASE_ISO_PATH" -volid_get 2>/dev/null)
+    if [ -z "$ISO_LABEL" ]; then error_exit "Could not get Volume ID from base ISO using xorriso. Check path: ${BASE_ISO_PATH}"; fi
+    
     KS_PARAM="inst.ks=hd:LABEL=${ISO_LABEL}:/${KS_FILENAME}"
     sed -i "/^  linux/ s@\$@ ${KS_PARAM}@" "iso_root/EFI/BOOT/grub.cfg"
     sed -i "/^  append/ s@\$@ ${KS_PARAM}@" "iso_root/isolinux/isolinux.cfg"
     echo -e "${GREEN}    Bootloader configured for unattended install.${NC}"
+    
     print_step "Rebuilding final ISO image..."
     cd "iso_root" || error_exit "Could not enter final build directory."
     xorriso -as mkisofs -V "${ISO_LABEL}" -o "../../${FINAL_ISO_NAME}" -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin -c isolinux/boot.cat -b isolinux/isolinux.bin -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e images/efiboot.img -no-emul-boot -isohybrid-gpt-basdat . > /dev/null 2>&1 || error_exit "Failed to rebuild final ISO."
