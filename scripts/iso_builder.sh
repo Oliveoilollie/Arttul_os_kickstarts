@@ -32,7 +32,7 @@ print_step() {
 
 # --- Configuration ---
 DISTRO_NAME="ArttulOS"
-BASE_ISO_URL="https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.4-x86_64-dvd.iso"
+BASE_ISO_URL="https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.6-x86_64-dvd.iso"
 BASE_ISO_FILENAME=$(basename "$BASE_ISO_URL")
 DISTRO_VERSION="9.4"
 ASSET_REPO_URL="https://github.com/Sprunglesonthehub/arttulos-assets.git"
