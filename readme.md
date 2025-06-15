@@ -77,8 +77,8 @@ Ready to build your first ArttulOS image? Follow these steps.
 
 1.  **Clone the Repository:**
     ```bash
-    git clone https://github.com/your-username/arttulos.git
-    cd arttulos
+    git clone https://github.com/Oliveoilollie/Arttul_os_kickstarts.git
+    cd Arttul_os_kickstarts
     ```
 
 2.  **Switch to the `natalie` Branch:**
