@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ==============================================================================
-#  ArttulOS Automated ISO Builder v5.0
+#  ArttulOS Automated ISO Builder v5.1
 #
-#  Merges visual branding with unattended Kickstart installation to create a
-#  true "appliance-style" distributable OS.
+#  Merges visual branding with unattended Kickstart installation.
+#  Package pre-flight checks have been removed by user request.
 #
 #  Original Concepts & Logic By:
 #  - Visual Branding: Natalie Spiva, ArttulOS Project
@@ -51,7 +51,7 @@ SOURCE_TOPBAR_IMAGE="fox.png"
 # Kickstart Configuration
 KS_FILENAME="arttulos.ks"
 KS_LANG="en_US.UTF-8"
-KS_TIMEZONE="America/New_York" # Changed to a common default
+KS_TIMEZONE="America/New_York"
 KS_HOSTNAME="arttulos-desktop"
 KS_USER="arttulos"
 KS_PASS="arttulos" # WARNING: Insecure default password
@@ -116,20 +116,12 @@ EOF
 main() {
     # --- Banner ---
     echo -e "${BLUE}======================================================================${NC}"
-    echo -e "${BLUE}  ArttulOS Automated ISO Builder v5.0                                 ${NC}"
+    echo -e "${BLUE}  ArttulOS Automated ISO Builder v5.1                                 ${NC}"
     echo -e "${BLUE}  Combines branding and unattended installation for a true appliance. ${NC}"
     echo -e "${BLUE}======================================================================${NC}"
 
-    # --- Pre-flight Checks ---
-    echo -e "\n${YELLOW}--> Performing pre-flight checks...${NC}"
-    for dep in git convert wget xorriso unsquashfs mksquashfs 7z; do
-        if ! command -v "$dep" &> /dev/null; then
-            error_exit "Required command '$dep' not found. On Alma/Rocky, try:\nsudo dnf install epel-release\nsudo dnf install git ImageMagick wget xorriso squashfs-tools p7zip"
-        fi
-    done
-    echo -e "${GREEN}    All required tools are installed.${NC}"
-
     # --- Get Base ISO ---
+    echo -e "\n${YELLOW}--> Performing pre-flight checks...${NC}"
     if [ ! -f "$ISO_FILENAME" ]; then
         echo -e "${YELLOW}    Base ISO '${ISO_FILENAME}' not found.${NC}"
         read -p "Do you want to download it now? (~9GB) [y/N]: " -n 1 -r REPLY; echo
@@ -138,6 +130,8 @@ main() {
         else
             error_exit "User aborted. Please provide the base ISO."
         fi
+    else
+        echo -e "${GREEN}    Found local base ISO: ${ISO_FILENAME}${NC}"
     fi
 
     # --- Build Process ---
