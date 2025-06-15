@@ -1,16 +1,10 @@
 #!/bin/bash
 
 # ==============================================================================
-#  ArttulOS Automated ISO Builder v8.0 (OEM Setup Mode)
+#  ArttulOS Automated ISO Builder v8.1 (RHEL 9.4+ Compatible)
 #
-#  Builds an ISO in one of three modes:
-#  1. Interactive (Default): Secure mode. Installer stops for user creation.
-#     (./build_arttulos.sh)
-#  2. OEM (Recommended Distro): Fully automated install followed by a
-#     first-boot setup wizard for the user.
-#     (./build_arttulos.sh --oem)
-#  3. Appliance (Testing): Creates a preset 'arttulos' user.
-#     (./build_arttulos.sh --appliance)
+#  Fixes the build process for modern Rocky/AlmaLinux 9.4+ ISOs by targeting
+#  the new 'install.img' file instead of the legacy 'squashfs.img'.
 #
 #  Written by: Natalie Spiva, ArttulOS Project
 # ==============================================================================
@@ -73,14 +67,12 @@ EOF
 
     # Mode-Specific Automation Settings
     if [ "$BUILD_MODE" == "Appliance" ] || [ "$BUILD_MODE" == "OEM" ]; then
-        # Both Appliance and OEM modes are fully automated during install
         cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
 eula --agreed
 reboot
 EOF
     fi
     if [ "$BUILD_MODE" == "Appliance" ]; then
-        # Only Appliance mode creates a preset user
         cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
 user --name=arttulos --groups=wheel --password=arttulos --plaintext
 EOF
@@ -92,8 +84,6 @@ EOF
 echo "--- Starting ArttulOS Post-Installation Script (${BUILD_MODE} mode) ---"
 echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel
 sed -i 's/^#?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-
-# --- Mode-Specific Post-Install Actions ---
 EOF
 
     if [ "$BUILD_MODE" == "Appliance" ]; then
@@ -107,24 +97,17 @@ EOF
     elif [ "$BUILD_MODE" == "OEM" ]; then
         cat << EOF >> "$BUILD_DIR/$KS_FILENAME"
 echo "Creating and enabling the OEM first-boot setup service..."
-# Create the systemd service file that will run the setup wizard
 cat << SERVICE_EOF > /etc/systemd/system/oem-setup.service
 [Unit]
 Description=ArttulOS First Boot Setup Wizard
 After=graphical.target
-
 [Service]
 Type=oneshot
-# Run the GNOME Initial Setup tool
 ExecStart=/usr/libexec/gnome-initial-setup --existing-user
-# After running, disable this service so it never runs again
 ExecStartPost=/usr/bin/systemctl disable oem-setup.service
-
 [Install]
 WantedBy=graphical.target
 SERVICE_EOF
-
-# Enable the new service so it starts on the first boot
 systemctl enable oem-setup.service
 EOF
     else # Interactive Mode
@@ -153,7 +136,7 @@ main() {
 
     # Banner
     echo -e "${BLUE}======================================================================${NC}"
-    echo -e "${BLUE}  ArttulOS Automated ISO Builder v8.0                                 ${NC}"
+    echo -e "${BLUE}  ArttulOS Automated ISO Builder v8.1                                 ${NC}"
     echo -e "${BLUE}  Building in: ${YELLOW}${BUILD_MODE} Mode${NC} (Default is Interactive)"
     echo -e "${BLUE}======================================================================${NC}"
 
@@ -183,13 +166,24 @@ main() {
     echo -e "\n${YELLOW}--> Steps 4 & 5: Unpacking ISO and applying visual branding...${NC}"
     7z x "$ISO_FILENAME" -o"$BUILD_DIR/iso_root" > /dev/null || error_exit "Failed to extract base ISO."
     cd "$BUILD_DIR" || error_exit "Could not enter build directory."
-    unsquashfs iso_root/images/squashfs.img > /dev/null || error_exit "Failed to unpack squashfs.img."
+    
+    # <<< FIX IS HERE >>>
+    # Unpack the NEW 'install.img' file instead of the old 'squashfs.img'
+    unsquashfs iso_root/images/install.img > /dev/null || error_exit "Failed to unpack install.img. The base ISO may be corrupt or an unsupported version."
+    
     cp -f "$FINAL_SIDEBAR_PNG" squashfs-root/usr/share/anaconda/pixmaps/sidebar-logo.png
     cp -f "$FINAL_TOPBAR_PNG"  squashfs-root/usr/share/anaconda/pixmaps/topbar-logo.png
     sed -i "s/NAME=\"Rocky Linux\"/NAME=\"${DISTRO_NAME}\"/" squashfs-root/etc/os-release
     sed -i "s/Rocky Linux release/${DISTRO_NAME} release/" squashfs-root/etc/redhat-release
-    rm iso_root/images/squashfs.img
-    mksquashfs squashfs-root iso_root/images/squashfs.img -noappend > /dev/null || error_exit "Failed to repack squashfs.img."
+    
+    # <<< FIX IS HERE >>>
+    # Remove the OLD 'install.img' file before repacking
+    rm iso_root/images/install.img
+    
+    # <<< FIX IS HERE >>>
+    # Repack the filesystem into a NEW 'install.img' file
+    mksquashfs squashfs-root iso_root/images/install.img -noappend > /dev/null || error_exit "Failed to repack install.img."
+    
     echo -e "${GREEN}    Visual branding applied.${NC}"
 
     echo -e "\n${YELLOW}--> Step 6: Integrating Kickstart and configuring bootloader...${NC}"
