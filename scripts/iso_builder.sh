@@ -1,11 +1,10 @@
 #!/bin/bash
 
 # ==============================================================================
-#  ArttulOS Automated ISO Builder v9.3-debug
+#  ArttulOS Automated ISO Builder v9.4 (Definitive Edition)
 #
-#  - ADDS INTENSE LOGGING around the image conversion step to diagnose a
-#    persistent 'convert' error. We will now treat the environment or
-#    script logic as the primary suspect, not the asset files.
+#  - Uses explicit destination paths to be robust against working directory issues.
+#  - This is the final, corrected version for a clean build.
 #
 #  Written by: Natalie Spiva, ArttulOS Project
 # ==============================================================================
@@ -43,7 +42,6 @@ BUILD_MODE="Interactive"; TOTAL_STEPS=8
 
 generate_kickstart() {
     print_step "Generating Kickstart file for '${BUILD_MODE}' mode..."
-    # Kickstart generation logic is unchanged
     KS_LANG="en_US.UTF-8"; KS_TIMEZONE="America/New_York"; KS_HOSTNAME="arttulos-desktop"
     cat > "$BUILD_DIR/$KS_FILENAME" <<EOF
 graphical
@@ -114,8 +112,8 @@ main() {
 
     # Banner
     echo -e "${BLUE}======================================================================${NC}"
-    echo -e "${BLUE}  ArttulOS Automated ISO Builder v9.3-debug                           ${NC}"
-    echo -e "${BLUE}  Building in: ${YELLOW}${BUILD_MODE} Mode${NC}"
+    echo -e "${BLUE}  ArttulOS Automated ISO Builder v9.4                                 ${NC}"
+    echo -e "${BLUE}  Building in: ${YELLOW}${BUILD_MODE} Mode${NC} (Default is Interactive)"
     echo -e "${BLUE}======================================================================${NC}"
 
     # Build Process
@@ -135,37 +133,12 @@ main() {
     echo -e "${GREEN}    Assets cloned.${NC}"
 
     print_step "Processing and resizing branding images..."
-    
-    # +++ START OF NEW DEBUG BLOCK +++
-    echo -e "${YELLOW}--- DEBUG: Verifying paths and permissions before conversion ---${NC}"
     local sidebar_src_path="$BUILD_DIR/$ASSET_DIR/$SOURCE_SIDEBAR_IMAGE"
-    local sidebar_dest_path="$BUILD_DIR/arttulos-sidebar.png"
     local topbar_src_path="$BUILD_DIR/$ASSET_DIR/$SOURCE_TOPBAR_IMAGE"
-    local topbar_dest_path="$BUILD_DIR/arttulos-topbar.png"
-
-    echo "Current working directory: $(pwd)"
-    echo "Build directory ($BUILD_DIR) contents:"
-    ls -l "$BUILD_DIR"
-    echo "Asset directory ($BUILD_DIR/$ASSET_DIR) contents:"
-    ls -l "$BUILD_DIR/$ASSET_DIR"
-
-    echo "Sidebar Source Path Variable:      $sidebar_src_path"
-    echo "Sidebar Destination Path Variable: $sidebar_dest_path"
-    echo "Topbar Source Path Variable:       $topbar_src_path"
-    echo "Topbar Destination Path Variable:  $topbar_dest_path"
-
-    echo "Checking source file with 'file' command:"
-    file "$sidebar_src_path"
-    file "$topbar_src_path"
-    
-    echo "Verifying ImageMagick version:"
-    convert -version
-    
-    echo -e "${YELLOW}--- DEBUG: Attempting conversion now... ---${NC}"
-    # +++ END OF NEW DEBUG BLOCK +++
-    
-    convert "$sidebar_src_path" -resize 180x230\! "$sidebar_dest_path" || error_exit "ImageMagick failed to process sidebar image."
-    convert "$topbar_src_path" -resize 150x25\! "$topbar_dest_path" || error_exit "ImageMagick failed to process topbar image."
+    if [ ! -f "$sidebar_src_path" ]; then error_exit "Source sidebar image not found: $sidebar_src_path"; fi
+    if [ ! -f "$topbar_src_path" ]; then error_exit "Source topbar image not found: $topbar_src_path"; fi
+    convert "$sidebar_src_path" -resize 180x230\! "$BUILD_DIR/arttulos-sidebar.png" || error_exit "ImageMagick failed to process sidebar image."
+    convert "$topbar_src_path" -resize 150x25\! "$BUILD_DIR/arttulos-topbar.png" || error_exit "ImageMagick failed to process topbar image."
     echo -e "${GREEN}    Images resized successfully.${NC}"
     
     generate_kickstart
@@ -174,33 +147,32 @@ main() {
     7z x "$ISO_FILENAME" -o"$BUILD_DIR/iso_root" > /dev/null || error_exit "Failed to extract base ISO."
     echo -e "${GREEN}    ISO extracted.${NC}"
 
-    cd "$BUILD_DIR" || error_exit "Could not enter build directory."
-
     print_step "Applying visual branding (unpacking installer...)"
-    unsquashfs -progress iso_root/images/install.img || error_exit "Failed to unpack install.img."
+    unsquashfs -d "$BUILD_DIR/squashfs-root" -progress "$BUILD_DIR/iso_root/images/install.img" || error_exit "Failed to unpack install.img."
     
-    cp -f "$sidebar_dest_path" squashfs-root/usr/share/anaconda/pixmaps/sidebar-logo.png
-    cp -f "$topbar_dest_path"  squashfs-root/usr/share/anaconda/pixmaps/topbar-logo.png
-    sed -i "s/NAME=\"Rocky Linux\"/NAME=\"${DISTRO_NAME}\"/" squashfs-root/etc/os-release
-    sed -i "s/Rocky Linux release/${DISTRO_NAME} release/" squashfs-root/etc/redhat-release
+    cp -f "$BUILD_DIR/arttulos-sidebar.png" "$BUILD_DIR/squashfs-root/usr/share/anaconda/pixmaps/sidebar-logo.png"
+    cp -f "$BUILD_DIR/arttulos-topbar.png"  "$BUILD_DIR/squashfs-root/usr/share/anaconda/pixmaps/topbar-logo.png"
+    sed -i "s/NAME=\"Rocky Linux\"/NAME=\"${DISTRO_NAME}\"/" "$BUILD_DIR/squashfs-root/etc/os-release"
+    sed -i "s/Rocky Linux release/${DISTRO_NAME} release/" "$BUILD_DIR/squashfs-root/etc/redhat-release"
     echo -e "${GREEN}    Visual branding applied.${NC}"
 
     print_step "Integrating Kickstart and repacking installer..."
-    cp "$KS_FILENAME" iso_root/
-    rm iso_root/images/install.img
-    mksquashfs squashfs-root iso_root/images/install.img -noappend -progress || error_exit "Failed to repack install.img."
+    cp "$BUILD_DIR/$KS_FILENAME" "$BUILD_DIR/iso_root/"
+    rm "$BUILD_DIR/iso_root/images/install.img"
+    mksquashfs "$BUILD_DIR/squashfs-root" "$BUILD_DIR/iso_root/images/install.img" -noappend -progress || error_exit "Failed to repack install.img."
     
-    ISO_LABEL=$(isoinfo -d -i ../"$ISO_FILENAME" | grep "Volume id" | awk -F': ' '{print $2}')
+    ISO_LABEL=$(isoinfo -d -i "$ISO_FILENAME" | grep "Volume id" | awk -F': ' '{print $2}')
     KS_PARAM="inst.ks=hd:LABEL=${ISO_LABEL}:/${KS_FILENAME}"
     
-    sed -i "/^  linux/ s@\$@ ${KS_PARAM}@" iso_root/EFI/BOOT/grub.cfg
-    sed -i "/^  append/ s@\$@ ${KS_PARAM}@" iso_root/isolinux/isolinux.cfg
+    sed -i "/^  linux/ s@\$@ ${KS_PARAM}@" "$BUILD_DIR/iso_root/EFI/BOOT/grub.cfg"
+    sed -i "/^  append/ s@\$@ ${KS_PARAM}@" "$BUILD_DIR/iso_root/isolinux/isolinux.cfg"
     echo -e "${GREEN}    Bootloader configured for unattended install.${NC}"
     
     print_step "Rebuilding final ISO image..."
-    cd iso_root
+    cd "$BUILD_DIR/iso_root" || error_exit "Could not enter final build directory."
     xorriso -as mkisofs -V "${ISO_LABEL}" -o "../../${FINAL_ISO_NAME}" -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin -c isolinux/boot.cat -b isolinux/isolinux.bin -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e images/efiboot.img -no-emul-boot -isohybrid-gpt-basdat . > /dev/null 2>&1 || error_exit "Failed to rebuild final ISO."
-    cd ../..; rm -rf "$BUILD_DIR"
+    cd ../..
+    rm -rf "$BUILD_DIR"
     
     # Success
     echo -e "\n${GREEN}======================================================================${NC}"
