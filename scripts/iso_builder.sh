@@ -200,7 +200,7 @@ main() {
         # -comp zstd: Uses the correct compression algorithm.
         # -Xbcj x86: Uses an x86 filter to improve compression of executables.
         # -noappend: Creates a clean image without appended metadata.
-        mksquashfs squashfs-root "iso_root/images/install.img" -b 1M -comp gzip -Xbcj x86 -noappend
+        mksquashfs squashfs-root "iso_root/images/install.img" -b 1M -comp gzip -Xcompression-level 9 -Xstrategy default -Xbcj x86 -noappend
         if [ $? -ne 0 ]; then exit 1; fi
         echo -e "${GREEN}    Installer image repacked correctly.${NC}"
 
