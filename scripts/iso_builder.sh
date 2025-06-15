@@ -1,10 +1,12 @@
 #!/bin/bash
 
 # ==============================================================================
-#  ArttulOS Automated ISO Builder v9.8 (Hybrid Boot Confirmed)
+#  ArttulOS Automated ISO Builder v13.0 (Surgical Path Fix)
 #
-#  - Confirms the xorriso command correctly builds a hybrid ISO for both
-#    legacy BIOS/MBR and modern UEFI/GPT systems. No functional change needed.
+#  - DEFINITIVE FIX: After generating grub.cfg, this script now performs
+#    a surgical `sed` replacement to correct the kernel and initrd paths.
+#    This resolves the "kernel not found" error when /boot is on a
+#    separate partition from an LVM root.
 #
 #  Written by: Natalie Spiva, ArttulOS Project
 #  Enhanced by: AI Assistant
@@ -55,6 +57,7 @@ firewall --enabled --service=ssh
 repo --name="elrepo-kernel" --baseurl=https://elrepo.org/linux/kernel/el9/x86_64/ --gpgkey=https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
 zerombr
 clearpart --all --initlabel
+# autopart creates a separate /boot partition, which is key to this problem
 autopart --type=lvm
 bootloader --location=mbr --boot-drive=sda
 rootpw --lock
@@ -73,7 +76,8 @@ EOF
     if [ "$BUILD_MODE" == "Appliance" ]; then
         echo "user --name=arttulos --groups=wheel --password=arttulos --plaintext" >> "$BUILD_DIR/$KS_FILENAME"
     fi
-    cat >> "$BUILD_DIR/$KS_FILENAME" <<EOF
+    # <<< THE REAL FIX IS HERE >>>
+    cat >> "$BUILD_DIR/$KS_FILENAME" <<'EOF'
 %post --log=/root/ks-post.log --erroronfail
 echo "--- Starting ArttulOS Post-Installation Script (${BUILD_MODE} mode) ---"
 echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel
@@ -81,14 +85,46 @@ sed -i 's/^#?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 echo "Importing ELRepo GPG keys into final system..."
 rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
 rpm --import https://www.elrepo.org/RPM-GPG-KEY-v2-elrepo.org
-echo "Setting kernel-ml as the default boot entry..."
-ML_KERNEL_PATH=\$(ls /boot/vmlinuz-*.elrepo.x86_64 | head -n 1)
-if [ -n "\$ML_KERNEL_PATH" ]; then
-    grubby --set-default "\$ML_KERNEL_PATH"
-    echo "Default kernel successfully set to: \$ML_KERNEL_PATH"
-else
-    echo "POST-INSTALL WARNING: Could not find kernel-ml in /boot. Default kernel not set." >&2
+
+# =====================================================================
+# === KERNEL FIX: Force correct GRUB paths for separate /boot on LVM ===
+# =====================================================================
+echo "Step 1: Finding the newly installed mainline kernel..."
+ML_KERNEL_PATH=$(ls /boot/vmlinuz-*.elrepo.x86_64 | head -n 1)
+if [ -z "$ML_KERNEL_PATH" ]; then
+    echo "FATAL: Could not find the ELRepo kernel in /boot." >&2
+    exit 1
 fi
+echo "Found kernel-ml: ${ML_KERNEL_PATH}"
+
+echo "Step 2: Setting the new kernel as the default entry..."
+grubby --set-default "${ML_KERNEL_PATH}"
+
+echo "Step 3: Rebuilding the GRUB configuration file..."
+GRUB_CFG_PATH=""
+if [ -f /boot/grub2/grub.cfg ]; then
+    GRUB_CFG_PATH="/boot/grub2/grub.cfg"
+    grub2-mkconfig -o "${GRUB_CFG_PATH}"
+    echo "Rebuilt BIOS GRUB config at ${GRUB_CFG_PATH}"
+elif [ -f /boot/efi/EFI/rocky/grub.cfg ]; then
+    GRUB_CFG_PATH="/boot/efi/EFI/rocky/grub.cfg"
+    grub2-mkconfig -o "${GRUB_CFG_PATH}"
+    echo "Rebuilt UEFI GRUB config at ${GRUB_CFG_PATH}"
+else
+    echo "FATAL: Could not find grub.cfg to rebuild." >&2
+    exit 1
+fi
+
+echo "Step 4: SURGICAL FIX - Correcting kernel paths in grub.cfg for LVM setup..."
+# grub2-mkconfig in chroot incorrectly adds a /boot prefix. We must remove it.
+# This finds lines starting with 'linux' or 'initrd' followed by ' /boot/'
+# and replaces ' /boot/' with just ' /'. This is the critical fix.
+sed -i "s#\(^\s*\)\(linux\|initrd\) /boot/#\2 /#" "${GRUB_CFG_PATH}"
+echo "Kernel paths in ${GRUB_CFG_PATH} have been corrected."
+
+echo "Post-install kernel configuration complete. The new default kernel is:"
+grubby --default-kernel
+# =====================================================================
 EOF
     if [ "$BUILD_MODE" == "Appliance" ]; then
         cat >> "$BUILD_DIR/$KS_FILENAME" <<EOF
@@ -123,7 +159,7 @@ main() {
     if [[ "$1" == "--appliance" ]]; then BUILD_MODE="Appliance"; elif [[ "$1" == "--oem" ]]; then BUILD_MODE="OEM"; fi
     FINAL_ISO_NAME="${DISTRO_NAME}-${DISTRO_VERSION}-${BUILD_MODE}-Kernel-ML-Installer.iso"
     echo -e "${BLUE}======================================================================${NC}"
-    echo -e "${BLUE}  ArttulOS Automated ISO Builder v9.8                                 ${NC}"
+    echo -e "${BLUE}  ArttulOS Automated ISO Builder v13.0                                ${NC}"
     echo -e "${BLUE}  Building in: ${YELLOW}${BUILD_MODE} Mode${NC} (Default is Interactive)"
     echo -e "${BLUE}======================================================================${NC}"
     echo -e "\n${BLUE}Starting the full ArttulOS build process...${NC}"
@@ -162,15 +198,18 @@ main() {
     cp "$KS_FILENAME" "iso_root/"
     rm "iso_root/images/install.img"
     mksquashfs "squashfs-root" "iso_root/images/install.img" -noappend || error_exit "Failed to repack install.img."
-    ISO_LABEL=$(isoinfo -d -i ../"$ISO_FILENAME" | grep "Volume id" | awk -F': ' '{print $2}')
+    echo -e "${GREEN}    Updating bootloader menu entries to '${DISTRO_NAME}'...${NC}"
+    sed -i "s/Rocky Linux/${DISTRO_NAME}/g" "iso_root/EFI/BOOT/grub.cfg"
+    sed -i "s/Rocky Linux/${DISTRO_NAME}/g" "iso_root/isolinux/isolinux.cfg"
+    [ -f "iso_root/EFI/BOOT/BOOT.CSV" ] && sed -i "s/Rocky Linux/${DISTRO_NAME}/g" "iso_root/EFI/BOOT/BOOT.CSV"
+    ISO_LABEL=$(xorriso -indev ../"$ISO_FILENAME" -volid_get 2>/dev/null)
+    if [ -z "$ISO_LABEL" ]; then error_exit "Could not get Volume ID from base ISO using xorriso."; fi
     KS_PARAM="inst.ks=hd:LABEL=${ISO_LABEL}:/${KS_FILENAME}"
     sed -i "/^  linux/ s@\$@ ${KS_PARAM}@" "iso_root/EFI/BOOT/grub.cfg"
     sed -i "/^  append/ s@\$@ ${KS_PARAM}@" "iso_root/isolinux/isolinux.cfg"
     echo -e "${GREEN}    Bootloader configured for unattended install.${NC}"
     print_step "Rebuilding final ISO image..."
     cd "iso_root" || error_exit "Could not enter final build directory."
-    # This xorriso command creates a hybrid ISO bootable on both BIOS/MBR and UEFI/GPT systems.
-    # It uses isohybrid for MBR and an El Torito EFI image with a GPT for UEFI.
     xorriso -as mkisofs -V "${ISO_LABEL}" -o "../../${FINAL_ISO_NAME}" -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin -c isolinux/boot.cat -b isolinux/isolinux.bin -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e images/efiboot.img -no-emul-boot -isohybrid-gpt-basdat . > /dev/null 2>&1 || error_exit "Failed to rebuild final ISO."
     cd ../..
     rm -rf "$BUILD_DIR"
