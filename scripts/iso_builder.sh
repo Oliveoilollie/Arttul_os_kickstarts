@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # ==============================================================================
-#  ArttulOS Automated ISO Builder v9.1 (sed Fix & Progress)
+#  ArttulOS Automated ISO Builder v9.2 (Robust Asset Checks)
 #
-#  - Adds progress indicators for long operations.
-#  - Fixes a critical 'sed' command error by using a safe delimiter (@).
+#  - Adds explicit checks to verify assets exist after git clone, preventing
+#    confusing 'convert' errors and providing clearer failure messages.
+#  - Includes sed fix and progress indicators from previous versions.
 #
 #  Written by: Natalie Spiva, ArttulOS Project
 # ==============================================================================
@@ -42,7 +43,6 @@ BUILD_MODE="Interactive"; TOTAL_STEPS=8
 
 generate_kickstart() {
     print_step "Generating Kickstart file for '${BUILD_MODE}' mode..."
-    
     KS_LANG="en_US.UTF-8"; KS_TIMEZONE="America/New_York"; KS_HOSTNAME="arttulos-desktop"
     cat << EOF > "$BUILD_DIR/$KS_FILENAME"
 graphical
@@ -121,7 +121,7 @@ main() {
 
     # Banner
     echo -e "${BLUE}======================================================================${NC}"
-    echo -e "${BLUE}  ArttulOS Automated ISO Builder v9.1                                 ${NC}"
+    echo -e "${BLUE}  ArttulOS Automated ISO Builder v9.2                                 ${NC}"
     echo -e "${BLUE}  Building in: ${YELLOW}${BUILD_MODE} Mode${NC} (Default is Interactive)"
     echo -e "${BLUE}======================================================================${NC}"
 
@@ -147,8 +147,19 @@ main() {
     echo -e "${GREEN}    Assets cloned.${NC}"
 
     print_step "Processing and resizing branding images..."
-    convert "$BUILD_DIR/$ASSET_DIR/$SOURCE_SIDEBAR_IMAGE" -resize 180x230\! "$BUILD_DIR/$FINAL_SIDEBAR_PNG" || error_exit "Failed to process sidebar image."
-    convert "$BUILD_DIR/$ASSET_DIR/$SOURCE_TOPBAR_IMAGE" -resize 150x25\! "$BUILD_DIR/$FINAL_TOPBAR_PNG" || error_exit "Failed to process topbar image."
+    # <<< FIX IS HERE >>> Add checks to ensure the source files exist BEFORE trying to convert them.
+    local sidebar_src_path="$BUILD_DIR/$ASSET_DIR/$SOURCE_SIDEBAR_IMAGE"
+    local topbar_src_path="$BUILD_DIR/$ASSET_DIR/$SOURCE_TOPBAR_IMAGE"
+
+    if [ ! -f "$sidebar_src_path" ]; then
+        error_exit "Source sidebar image not found at expected path: $sidebar_src_path"
+    fi
+    if [ ! -f "$topbar_src_path" ]; then
+        error_exit "Source topbar image not found at expected path: $topbar_src_path"
+    fi
+
+    convert "$sidebar_src_path" -resize 180x230\! "$BUILD_DIR/$FINAL_SIDEBAR_PNG" || error_exit "ImageMagick failed to process sidebar image."
+    convert "$topbar_src_path" -resize 150x25\! "$BUILD_DIR/$FINAL_TOPBAR_PNG" || error_exit "ImageMagick failed to process topbar image."
     echo -e "${GREEN}    Images resized successfully.${NC}"
     
     generate_kickstart
@@ -176,10 +187,8 @@ main() {
     ISO_LABEL=$(isoinfo -d -i ../"$ISO_FILENAME" | grep "Volume id" | awk -F': ' '{print $2}')
     KS_PARAM="inst.ks=hd:LABEL=${ISO_LABEL}:/${KS_FILENAME}"
     
-    # <<< FIX IS HERE >>> Using '@' as the sed delimiter to avoid conflicts.
     sed -i "/^  linux/ s@\$@ ${KS_PARAM}@" iso_root/EFI/BOOT/grub.cfg
     sed -i "/^  append/ s@\$@ ${KS_PARAM}@" iso_root/isolinux/isolinux.cfg
-    
     echo -e "${GREEN}    Bootloader configured for unattended install.${NC}"
     
     print_step "Rebuilding final ISO image..."
