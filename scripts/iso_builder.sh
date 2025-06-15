@@ -153,7 +153,7 @@ main() {
     print_step "Applying visual branding (unpacking installer...)"
     # <<< FIX IS HERE >>> Using a simpler, more robust syntax for unsquashfs.
     # This command relies on the default behavior of creating 'squashfs-root' in the current directory.
-    unsquashfs -progress "iso_root/images/install.img" || error_exit "Failed to unpack install.img."
+    unsquashfs "iso_root/images/install.img" || error_exit "Failed to unpack install.img."
     
     cp -f "arttulos-sidebar.png" "squashfs-root/usr/share/anaconda/pixmaps/sidebar-logo.png"
     cp -f "arttulos-topbar.png"  "squashfs-root/usr/share/anaconda/pixmaps/topbar-logo.png"
