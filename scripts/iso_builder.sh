@@ -164,7 +164,7 @@ main() {
     print_step "Integrating Kickstart and repacking installer..."
     cp "$KS_FILENAME" "iso_root/"
     rm "iso_root/images/install.img"
-    mksquashfs "squashfs-root" "iso_root/images/install.img" -noappend -progress || error_exit "Failed to repack install.img."
+    mksquashfs "squashfs-root" "iso_root/images/install.img" -noappend || error_exit "Failed to repack install.img."
     
     ISO_LABEL=$(isoinfo -d -i ../"$ISO_FILENAME" | grep "Volume id" | awk -F': ' '{print $2}')
     KS_PARAM="inst.ks=hd:LABEL=${ISO_LABEL}:/${KS_FILENAME}"
