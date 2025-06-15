@@ -4,8 +4,6 @@
 
 **A stable, user-friendly Linux distribution based on Rocky Linux, designed for everyone.**
 
-[![License: MIT](https://opensource.org/license/mit)
-
 ---
 
 ### Welcome to ArttulOS
